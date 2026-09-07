@@ -50,8 +50,8 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": {"type": "object", "properties": {"indices": {"type": "array", "items": {"type": "integer"}}, "sources": {"type": "array", "items": {"type": "string"}}, "targets": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": False}},
     {"name": "set_feedback", "description": "Replace the rumble/LED feedback rules of the profile.",
      "input_schema": {"type": "object", "properties": {"feedback": {"type": "array", "items": {"type": "object", "properties": _FEEDBACK_PROPS, "additionalProperties": False}}}, "required": ["feedback"], "additionalProperties": False}},
-    {"name": "set_profile_meta", "description": "Update name, play_style, notes, gesture_sensitivity (0.5 = easier gestures, 1.5 = harder) or sphere colours.",
-     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "play_style": {"type": "string"}, "notes": {"type": "string"}, "gesture_sensitivity": {"type": "number"}, "controller_colors": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}}, "additionalProperties": False}},
+    {"name": "set_profile_meta", "description": "Update name, play_style, notes, gesture_sensitivity (0.5 = easier gestures, 1.5 = harder), gesture_cooldown_ms (min ms between repeated gestures, 80-100 for drumming) or sphere colours.",
+     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "play_style": {"type": "string"}, "notes": {"type": "string"}, "gesture_sensitivity": {"type": "number"}, "gesture_cooldown_ms": {"type": "integer"}, "controller_colors": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}}, "additionalProperties": False}},
     {"name": "replace_profile", "description": "Replace the whole profile with a new one (same JSON shape as get_profile). Use only for big redesigns.",
      "input_schema": {"type": "object", "properties": {"profile": {"type": "object"}}, "required": ["profile"], "additionalProperties": False}},
     {"name": "buzz_controller", "description": "Pulse rumble and/or flash the sphere of a controller so the player can identify it or feel a setting.",
@@ -164,7 +164,8 @@ class CoachChat:
         return self._apply(p)
 
     def _tool_set_profile_meta(self, name: Optional[str] = None, play_style: Optional[str] = None, notes: Optional[str] = None,
-                               gesture_sensitivity: Optional[float] = None, controller_colors: Optional[list[list[int]]] = None) -> str:
+                               gesture_sensitivity: Optional[float] = None, gesture_cooldown_ms: Optional[int] = None,
+                               controller_colors: Optional[list[list[int]]] = None) -> str:
         p = self.host.get_profile().copy()
         if name is not None:
             p.name = name
@@ -174,6 +175,8 @@ class CoachChat:
             p.notes = notes
         if gesture_sensitivity is not None:
             p.gesture_sensitivity = max(0.2, min(3.0, float(gesture_sensitivity)))
+        if gesture_cooldown_ms is not None:
+            p.gesture_cooldown_ms = max(30, min(2000, int(gesture_cooldown_ms)))
         if controller_colors:
             for i, c in enumerate(controller_colors[:2]):
                 p.controllers[i].color = [int(x) for x in c][:3]

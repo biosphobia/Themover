@@ -137,6 +137,8 @@ class MappingTab(QWidget):
         top.addWidget(QLabel("Game")); top.addWidget(self.game_edit, 2)
         self.sens = QDoubleSpinBox(); self.sens.setRange(0.2, 3.0); self.sens.setSingleStep(0.1); self.sens.setToolTip("Gesture sensitivity: lower = gestures trigger more easily")
         top.addWidget(QLabel("Gesture sensitivity")); top.addWidget(self.sens)
+        self.cooldown = QSpinBox(); self.cooldown.setRange(30, 2000); self.cooldown.setSuffix(" ms"); self.cooldown.setToolTip("Minimum time between two of the same gesture (80-100 for drumming)")
+        top.addWidget(QLabel("Gesture cooldown")); top.addWidget(self.cooldown)
         root.addLayout(top)
 
         tools = QHBoxLayout()
@@ -198,6 +200,7 @@ class MappingTab(QWidget):
         self.name_edit.editingFinished.connect(self._meta_changed)
         self.game_edit.editingFinished.connect(self._meta_changed)
         self.sens.valueChanged.connect(self._meta_changed)
+        self.cooldown.valueChanged.connect(self._meta_changed)
         ctx.profile_changed.connect(self._on_profile_changed)
         self.populate(ctx.profile)
 
@@ -206,11 +209,14 @@ class MappingTab(QWidget):
         self.populate(profile)
 
     def populate(self, profile: Profile) -> None:
-        self.name_edit.blockSignals(True); self.game_edit.blockSignals(True); self.sens.blockSignals(True)
+        for w in (self.name_edit, self.game_edit, self.sens, self.cooldown):
+            w.blockSignals(True)
         self.name_edit.setText(profile.name)
         self.game_edit.setText(profile.game)
         self.sens.setValue(profile.gesture_sensitivity or 1.0)
-        self.name_edit.blockSignals(False); self.game_edit.blockSignals(False); self.sens.blockSignals(False)
+        self.cooldown.setValue(profile.gesture_cooldown_ms or 220)
+        for w in (self.name_edit, self.game_edit, self.sens, self.cooldown):
+            w.blockSignals(False)
         self.table.setRowCount(len(profile.bindings))
         for r, b in enumerate(profile.bindings):
             opts = b.describe().split("(", 1)[1].rstrip(")") if "(" in b.describe() else ""
@@ -243,6 +249,7 @@ class MappingTab(QWidget):
         p.name = self.name_edit.text().strip() or p.name
         p.game = self.game_edit.text().strip()
         p.gesture_sensitivity = self.sens.value()
+        p.gesture_cooldown_ms = self.cooldown.value()
         self._commit(p)
 
     def _load_template(self) -> None:

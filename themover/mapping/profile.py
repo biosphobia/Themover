@@ -116,6 +116,7 @@ class Profile:
     bindings: list[Binding] = field(default_factory=list)
     feedback: list[FeedbackRule] = field(default_factory=list)
     gesture_sensitivity: float = 1.0  # multiplies gesture thresholds (lower = easier)
+    gesture_cooldown_ms: int = 220  # minimum time between two of the same gesture
     notes: str = ""
 
     # ------------------------------------------------------------- serialise
@@ -129,6 +130,7 @@ class Profile:
             "bindings": [b.to_dict() for b in self.bindings],
             "feedback": [f.to_dict() for f in self.feedback],
             "gesture_sensitivity": self.gesture_sensitivity,
+            "gesture_cooldown_ms": self.gesture_cooldown_ms,
             "notes": self.notes,
         }
 
@@ -143,6 +145,7 @@ class Profile:
             description=str(data.get("description", "")),
             play_style=str(data.get("play_style", "")),
             gesture_sensitivity=float(data.get("gesture_sensitivity", 1.0) or 1.0),
+            gesture_cooldown_ms=int(data.get("gesture_cooldown_ms", 220) or 220),
             notes=str(data.get("notes", "")),
         )
         ctrls = data.get("controllers") or []
@@ -295,9 +298,10 @@ def profile_json_schema() -> dict[str, Any]:
             "controllers": {"type": "array", "items": controller},
             "bindings": {"type": "array", "items": binding},
             "feedback": {"type": "array", "items": feedback},
-            "gesture_sensitivity": {"type": "number"},
+            "gesture_sensitivity": {"type": "number", "description": "1.0 normal, 0.7 easier gestures, 1.5 needs harder swings"},
+            "gesture_cooldown_ms": {"type": "integer", "description": "min ms between repeats of a gesture; 220 default, 80-100 for drumming/rhythm"},
             "notes": {"type": "string"},
         },
-        "required": ["name", "game", "description", "play_style", "controllers", "bindings", "feedback", "gesture_sensitivity", "notes"],
+        "required": ["name", "game", "description", "play_style", "controllers", "bindings", "feedback", "gesture_sensitivity", "gesture_cooldown_ms", "notes"],
         "additionalProperties": False,
     }

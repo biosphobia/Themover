@@ -52,6 +52,7 @@ class Settings:
         default_factory=lambda: [[255, 0, 255], [0, 255, 255]]
     )
     controller_backend: str = "auto"  # auto | hid | simulated
+    controller_serials: list[str] = field(default_factory=lambda: ["", ""])  # remembered slot assignment
 
     # Engine
     tick_hz: int = 100

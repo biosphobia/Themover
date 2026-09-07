@@ -1,17 +1,16 @@
-"""PlayStation Move controller support over USB / Bluetooth HID.
+"""PlayStation Move controller support over Bluetooth / USB HID.
 
-The wire protocol follows the community documentation (psmoveapi).  Parsing is
-kept in pure functions so it is unit-testable; :class:`HidMoveController` wraps a
-real ``hidapi`` device and :class:`SimulatedMove` provides a keyboard-free stand-in
-when no hardware is connected.
+Pair the controllers with PSMoveServiceEx (or any other tool) first; The Mover
+only *reads* controllers that Windows already lists as HID devices.  The wire
+protocol follows the community documentation (psmoveapi).  Parsing is kept in
+pure functions so it is unit-testable; :class:`HidMoveController` wraps a real
+``hidapi`` device and :class:`SimulatedMove` provides a stand-in when no
+hardware is connected.
 """
 from __future__ import annotations
 
 import math
-import re
 import struct
-import subprocess
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -30,8 +29,6 @@ PSMOVE_PIDS = {PSMOVE_PID_ZCM1: "zcm1", PSMOVE_PID_ZCM2: "zcm2"}
 
 REQ_GET_INPUT = 0x01
 REQ_SET_LEDS = 0x02
-REQ_GET_BTADDR = 0x04
-REQ_SET_BTADDR = 0x05
 REQ_GET_CALIBRATION = 0x10
 
 # Button bit layout of the 32-bit word built by :func:`button_word`.
@@ -166,33 +163,6 @@ def build_led_report(r: int, g: int, b: int, rumble: float = 0.0) -> bytes:
     )
 
 
-def format_bt_address(raw: Iterable[int]) -> str:
-    return ":".join(f"{b:02x}" for b in raw)
-
-
-def parse_bt_address(text: str) -> bytes:
-    parts = re.split(r"[:\-]", text.strip())
-    if len(parts) != 6:
-        raise ValueError(f"not a bluetooth address: {text!r}")
-    return bytes(int(p, 16) for p in parts)
-
-
-def decode_btaddr_report(data: bytes) -> tuple[str, str]:
-    """Return ``(controller_address, host_address)`` from feature report 0x04."""
-    if len(data) < 16:
-        raise ValueError("bluetooth address report too short")
-    controller = bytes(reversed(data[1:7]))
-    host = bytes(reversed(data[10:16]))
-    return format_bt_address(controller), format_bt_address(host)
-
-
-def build_set_host_report(host: str, model: str = "zcm1") -> bytes:
-    addr = parse_bt_address(host)
-    body = bytes([REQ_SET_BTADDR]) + bytes(reversed(addr))
-    size = 7 if model == "zcm2" else 23
-    return body + bytes(size - len(body))
-
-
 # --------------------------------------------------------------------------- #
 # Runtime auto-calibration
 # --------------------------------------------------------------------------- #
@@ -309,6 +279,10 @@ class HidMoveController(MoveController):
         self._dev = None
         self._last_sent: tuple[tuple[int, int, int], float] | None = None
 
+    @property
+    def key(self) -> str:
+        return self.state.serial or self.path.decode("utf-8", "replace")
+
     def open(self) -> None:
         if hid is None:
             raise RuntimeError("hidapi is not installed")
@@ -376,19 +350,6 @@ class HidMoveController(MoveController):
             force = True
         super().flush_outputs(force)
 
-    # -- pairing helpers -----------------------------------------------------
-    def read_bt_addresses(self) -> tuple[str, str]:
-        if self._dev is None:
-            raise RuntimeError("controller is not open")
-        size = 21 if self.model == "zcm2" else 16
-        data = bytes(self._dev.get_feature_report(REQ_GET_BTADDR, size))
-        return decode_btaddr_report(data)
-
-    def set_host_address(self, host: str) -> None:
-        if self._dev is None:
-            raise RuntimeError("controller is not open")
-        self._dev.send_feature_report(build_set_host_report(host, self.model))
-
 
 class SimulatedMove(MoveController):
     """A fake controller with a gentle idle motion.
@@ -436,85 +397,55 @@ class DiscoveredMove:
     path: bytes
     model: str
     serial: str
-    interface: str  # "bluetooth" | "usb" | "unknown"
+    interface: str  # "bluetooth" | "usb"
+
+    @property
+    def key(self) -> str:
+        """Stable identity: the Bluetooth address when known, else the HID path."""
+        return self.serial or self.path.decode("utf-8", "replace")
+
+    @property
+    def label(self) -> str:
+        name = {"zcm1": "PS Move", "zcm2": "PS Move (PS4 model)"}.get(self.model, self.model)
+        return f"{name} {self.serial or '(no serial)'} via {self.interface}"
 
 
-def enumerate_controllers() -> list[DiscoveredMove]:
-    if hid is None:
-        return []
-    found: list[DiscoveredMove] = []
-    seen: set[bytes] = set()
-    try:
-        entries = hid.enumerate(PSMOVE_VID, 0)
-    except Exception:
-        return []
+def _normalise_serial(serial: str) -> str:
+    serial = (serial or "").strip().lower()
+    return serial.replace("-", ":")
+
+
+def enumerate_controllers(entries=None) -> list[DiscoveredMove]:
+    """List every PS Move the OS knows about, one entry per physical controller.
+
+    Windows can report the same controller through several HID interfaces or
+    collections; they are collapsed by serial number (Bluetooth address).
+    """
+    if entries is None:
+        if hid is None:
+            return []
+        try:
+            entries = hid.enumerate(PSMOVE_VID, 0)
+        except Exception:
+            return []
+    by_key: dict[str, DiscoveredMove] = {}
     for entry in entries:
         pid = entry.get("product_id")
-        if pid not in PSMOVE_PIDS:
+        if entry.get("vendor_id", PSMOVE_VID) != PSMOVE_VID or pid not in PSMOVE_PIDS:
             continue
         path = entry.get("path") or b""
-        if path in seen:
-            continue
-        seen.add(path)
-        serial = entry.get("serial_number") or ""
-        interface = "bluetooth" if serial and ":" in serial else "usb"
-        found.append(DiscoveredMove(path=path, model=PSMOVE_PIDS[pid], serial=serial, interface=interface))
+        if isinstance(path, str):
+            path = path.encode()
+        serial = _normalise_serial(entry.get("serial_number") or "")
+        interface = "bluetooth" if ":" in serial else "usb"
+        d = DiscoveredMove(path=path, model=PSMOVE_PIDS[pid], serial=serial, interface=interface)
+        prev = by_key.get(d.key)
+        if prev is None:
+            by_key[d.key] = d
+        elif entry.get("usage_page", 0) in (1, 0) and prev.path != path:
+            # Prefer the generic-desktop collection when several are exposed.
+            by_key[d.key] = d
+    found = list(by_key.values())
     # Bluetooth controllers first: those are the ones you play with.
-    found.sort(key=lambda d: (d.interface != "bluetooth", d.serial))
+    found.sort(key=lambda d: (d.interface != "bluetooth", d.serial, d.path))
     return found
-
-
-def host_bluetooth_address() -> Optional[str]:
-    """Best-effort lookup of this PC's Bluetooth adapter address."""
-    try:
-        if sys.platform.startswith("win"):
-            return _windows_bt_address()
-        if sys.platform.startswith("linux"):
-            import glob
-
-            for path in glob.glob("/sys/class/bluetooth/hci*/address"):
-                with open(path, encoding="utf-8") as fh:
-                    return fh.read().strip().lower()
-        if sys.platform == "darwin":
-            out = subprocess.run(
-                ["system_profiler", "SPBluetoothDataType"], capture_output=True, text=True, timeout=10
-            ).stdout
-            m = re.search(r"Address:\s*([0-9A-Fa-f:\-]{17})", out)
-            if m:
-                return m.group(1).replace("-", ":").lower()
-    except Exception:
-        return None
-    return None
-
-
-def _windows_bt_address() -> Optional[str]:  # pragma: no cover - Windows only
-    import ctypes
-    from ctypes import wintypes
-
-    class BLUETOOTH_FIND_RADIO_PARAMS(ctypes.Structure):
-        _fields_ = [("dwSize", wintypes.DWORD)]
-
-    class BLUETOOTH_RADIO_INFO(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("address", ctypes.c_ulonglong),
-            ("szName", ctypes.c_wchar * 248),
-            ("ulClassofDevice", wintypes.ULONG),
-            ("lmpSubversion", wintypes.USHORT),
-            ("manufacturer", wintypes.USHORT),
-        ]
-
-    bth = ctypes.windll.LoadLibrary("bthprops.cpl")
-    params = BLUETOOTH_FIND_RADIO_PARAMS(ctypes.sizeof(BLUETOOTH_FIND_RADIO_PARAMS))
-    radio = wintypes.HANDLE()
-    find = bth.BluetoothFindFirstRadio(ctypes.byref(params), ctypes.byref(radio))
-    if not find:
-        return None
-    try:
-        info = BLUETOOTH_RADIO_INFO(ctypes.sizeof(BLUETOOTH_RADIO_INFO))
-        if bth.BluetoothGetRadioInfo(radio, ctypes.byref(info)) != 0:
-            return None
-        raw = info.address.to_bytes(8, "little")[:6]
-        return format_bt_address(reversed(raw))
-    finally:
-        bth.BluetoothFindRadioClose(find)

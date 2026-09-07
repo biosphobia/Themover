@@ -13,6 +13,14 @@ from dataclasses import dataclass, field
 
 from themover.core.state import Vec3
 
+# Opposite directions of the same axis share a cooldown: one swing has an
+# acceleration phase and a stop phase, and must count as ONE gesture.
+GESTURE_AXIS = {
+    "swing_left": "x", "swing_right": "x",
+    "swing_up": "z", "swing_down": "z",
+    "thrust": "y", "pull": "y",
+}
+
 GESTURE_NAMES = (
     "swing_any",
     "swing_left",
@@ -76,8 +84,6 @@ class GestureDetector:
                 fired.append("swing_right" if lin.x > 0 else "swing_left")
             elif dominant == az:
                 fired.append("swing_up" if lin.z < 0 else "swing_down")
-            if fired:
-                fired.append("swing_any")
 
         if self.angular_speed >= cfg.flick_threshold_dps:
             fired.append("flick")
@@ -98,11 +104,15 @@ class GestureDetector:
 
         result: list[str] = []
         for name in fired:
-            last = self._last_fire.get(name, -1e9)
+            key = GESTURE_AXIS.get(name, name)
+            last = self._last_fire.get(key, -1e9)
             if now - last >= cfg.cooldown_s:
-                self._last_fire[name] = now
+                self._last_fire[key] = now
                 self._pulses[name] = now + cfg.pulse_s
                 result.append(name)
+                if name in GESTURE_AXIS:
+                    self._pulses["swing_any"] = now + cfg.pulse_s
+                    result.append("swing_any")
         return result
 
     def value(self, name: str, now: float | None = None) -> float:

@@ -26,6 +26,9 @@ DESIGN_GUIDELINES = """DESIGN GUIDELINES
   Camera velocity (track.vx/vy) can assist. Absolute pointing (mouse.abs_x/y from track.x/y) suits menus and light-gun games.
 - Steering: wheel.angle to gamepad.left_stick_x (input_range [-70,70]) or to key.a / key.d holds with thresholds (-15 / 15).
 - Gestures are pulses (~120ms): map them with mode tap (tap_ms 60-180). Use 'repeat' for spam-able attacks held via a button.
+- Rhythm / drumming games (osu!taiko, Taiko no Tatsujin, drum games): set gesture_cooldown_ms 80-100, tap_ms 30-40, map vertical
+  swings (swing_down AND swing_up, the stop of the strike is often the strongest) of each hand to that hand's drum key and the
+  outward lateral swing to the rim key. No camera is needed for these games.
 - Feedback: add 1-3 rules. rumble_from for continuous (throttle), when+duration for pulses (swing, shot, block).
 - Pick two clearly different sphere colours (default magenta [255,0,255] and cyan [0,255,255]).
 - Fill play_style with 2-4 friendly sentences telling the player how to hold and move the controllers.

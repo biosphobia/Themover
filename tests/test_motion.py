@@ -79,3 +79,23 @@ def test_shake_needs_reversals():
         fired_all += g.update(Vec3(sign * 2.0, 1, 0), Vec3(), 0.01, now=t)
         t += 0.05
     assert "shake" in fired_all
+
+
+def test_one_strike_is_one_gesture():
+    """A drum strike accelerates down then stops (opposite direction): one hit, not two."""
+    g = GestureDetector()
+    g.config.cooldown_s = 0.11
+    t = 0.0
+    for _ in range(50):
+        g.update(Vec3(0, 0, 1), Vec3(), 0.01, now=t)
+        t += 0.01
+    a = g.update(Vec3(0, 0, -2.0), Vec3(), 0.01, now=t)  # strike begins (accelerate)
+    b = g.update(Vec3(0, 0, 4.0), Vec3(), 0.01, now=t + 0.05)  # stick stops (decelerate)
+    assert "swing_up" in a and "swing_any" in a
+    assert b == []
+    # The next strike after the cooldown counts again.
+    c = g.update(Vec3(0, 0, -2.0), Vec3(), 0.01, now=t + 0.2)
+    assert "swing_up" in c
+    # A lateral swing is a different axis and is not blocked by the vertical one.
+    d = g.update(Vec3(2.5, 0, 1), Vec3(), 0.01, now=t + 0.21)
+    assert "swing_right" in d
