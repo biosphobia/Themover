@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "themover"
+version = "0.1.0"
+description = "Play any PC game with two PS Move controllers and a PS3 Eye camera - but here's the mover"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "anthropic>=1.0",
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "pillow>=10",
+    "PySide6>=6.6",
+    "pynput>=1.7",
+    "mss>=9",
+    "hidapi>=0.14",
+]
+
+[project.optional-dependencies]
+windows = ["vgamepad>=0.1"]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.scripts]
+themover = "themover.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["themover*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
