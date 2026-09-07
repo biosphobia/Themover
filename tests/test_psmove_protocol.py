@@ -75,7 +75,8 @@ def test_led_report_layout():
     rep = P.build_led_report(255, 0, 128, 0.5)
     assert rep[0] == P.REQ_SET_LEDS and rep[1] == 0
     assert rep[2:5] == bytes([255, 0, 128])
-    assert rep[6] == 128 and len(rep) == 9
+    assert rep[6] == 128 and len(rep) == P.LED_REPORT_SIZE == 49
+    assert rep[7:] == bytes(42)  # zero padding, like psmoveapi / PSMoveService
     assert P.build_led_report(300, -5, 0, 2.0)[2:5] == bytes([255, 0, 0])
 
 
@@ -98,3 +99,77 @@ def test_simulated_controller():
     assert sim.poll()
     assert sim.state.buttons["move"] and sim.state.trigger == 1.0
     assert sim.state.accel.y == 1.0
+
+
+class _Dev:
+    def __init__(self, fail=False):
+        self.writes = []
+        self.fail = fail
+
+    def open_path(self, p): pass
+    def set_nonblocking(self, v): pass
+    def read(self, n): return []
+    def close(self): pass
+    def error(self): return "boom" if self.fail else ""
+
+    def write(self, data):
+        self.writes.append(bytes(data))
+        return -1 if self.fail else len(data)
+
+
+def _controller(monkeypatch, dev):
+    class H:
+        @staticmethod
+        def device():
+            return dev
+    monkeypatch.setattr(P, "hid", H)
+    c = P.HidMoveController(0, b"path", "zcm1", "aa:bb", led_method="write")
+    c.open()
+    return c
+
+
+def test_led_writer_rate_limits_and_keeps_alive(monkeypatch):
+    dev = _Dev()
+    c = _controller(monkeypatch, dev)
+    c.set_led(255, 0, 0)
+    c.apply_outputs_now()
+    assert len(dev.writes) == 1 and dev.writes[0][2:5] == bytes([255, 0, 0]) and len(dev.writes[0]) == 49
+    c.set_led(0, 255, 0)
+    c.flush_outputs()  # too soon after the last write: deferred
+    assert len(dev.writes) == 1
+    c._last_write -= P.LED_MIN_WRITE_INTERVAL
+    c.flush_outputs()
+    assert len(dev.writes) == 2 and dev.writes[1][2:5] == bytes([0, 255, 0])
+    c._last_write -= P.LED_MIN_WRITE_INTERVAL
+    c.flush_outputs()  # nothing changed, not yet keep-alive time
+    assert len(dev.writes) == 2
+    c._last_write -= P.LED_KEEPALIVE_SECONDS
+    c.flush_outputs()
+    assert len(dev.writes) == 3
+    assert c.state.output_status.startswith("LED/rumble ok")
+
+
+def test_short_rumble_pulse_is_latched(monkeypatch):
+    dev = _Dev()
+    c = _controller(monkeypatch, dev)
+    c.apply_outputs_now()
+    c.set_rumble(1.0)
+    c.set_rumble(0.0)  # pulse over before the next write slot
+    c._last_write -= P.LED_MIN_WRITE_INTERVAL
+    c.flush_outputs()
+    assert dev.writes[-1][6] == 255  # the motor still got the pulse
+    c._last_write -= P.LED_MIN_WRITE_INTERVAL
+    c.flush_outputs()
+    assert dev.writes[-1][6] == 0  # ...and is switched off at the next slot
+
+
+def test_failed_writes_are_reported_and_retried(monkeypatch):
+    dev = _Dev(fail=True)
+    c = _controller(monkeypatch, dev)
+    c.set_led(1, 2, 3)
+    c.apply_outputs_now()
+    assert c.writes_failed == 1 and "NOT working" in c.state.output_status and "boom" in c.output_error
+    c._last_write -= P.LED_MIN_WRITE_INTERVAL
+    c.flush_outputs()  # retried even though the desired state did not change
+    assert len(dev.writes) == 2
+    assert c.state.connected  # a failed LED write must not drop the controller

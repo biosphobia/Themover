@@ -13,9 +13,13 @@ import math
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Optional
 
 from themover.core.state import BUTTON_NAMES, MoveState, Vec3
+
+import logging
+
+log = logging.getLogger(__name__)
 
 try:  # hidapi is optional so the app can start without it (simulated mode).
     import hid  # type: ignore
@@ -60,7 +64,9 @@ BUTTON_BITS = {
 DEFAULT_ACCEL_UNITS_PER_G = {"zcm1": 4300.0, "zcm2": 4096.0}
 DEFAULT_GYRO_RAD_PER_UNIT = {"zcm1": 8.378 / 7000.0, "zcm2": math.radians(1.0 / 16.4)}
 
+LED_REPORT_SIZE = 49  # psmoveapi / PSMoveService send the full-size report
 LED_KEEPALIVE_SECONDS = 2.0  # the controller switches its LED off after ~4-5s of silence
+LED_MIN_WRITE_INTERVAL = 0.12  # Bluetooth stacks drop (or worse, disconnect on) faster output reports
 
 
 # --------------------------------------------------------------------------- #
@@ -146,21 +152,14 @@ def battery_level(raw: int) -> tuple[float, bool]:
 
 
 def build_led_report(r: int, g: int, b: int, rumble: float = 0.0) -> bytes:
-    """Output report that sets the sphere colour and rumble strength."""
+    """Output report that sets the sphere colour and rumble strength.
+
+    Layout: type 0x02, zero, r, g, b, rumble2 (0), rumble, then zero padding up
+    to the 49-byte report size the controller expects.
+    """
     clamp = lambda v: max(0, min(255, int(round(v))))  # noqa: E731
-    return bytes(
-        [
-            REQ_SET_LEDS,
-            0x00,
-            clamp(r),
-            clamp(g),
-            clamp(b),
-            0x00,
-            clamp(rumble * 255.0),
-            0x00,
-            0x00,
-        ]
-    )
+    head = bytes([REQ_SET_LEDS, 0x00, clamp(r), clamp(g), clamp(b), 0x00, clamp(rumble * 255.0)])
+    return head + bytes(LED_REPORT_SIZE - len(head))
 
 
 # --------------------------------------------------------------------------- #
@@ -253,31 +252,43 @@ class MoveController:
         self.state.rumble = self._rumble
 
     def flush_outputs(self, force: bool = False) -> None:
-        """Send LED/rumble to the device (called every tick by the manager)."""
-        now = time.monotonic()
-        if force or now - self._last_led_write > LED_KEEPALIVE_SECONDS:
-            self._write_led_report()
-            self._last_led_write = now
-
-    def _write_led_report(self) -> None:  # pragma: no cover - overridden
-        pass
+        """Send LED/rumble to the device when needed (called every tick)."""
 
     def apply_outputs_now(self) -> None:
-        self._write_led_report()
-        self._last_led_write = time.monotonic()
+        """Send the current LED/rumble state right away (rate limit permitting)."""
 
 
 class HidMoveController(MoveController):
-    """A real controller reached through ``hidapi``."""
+    """A real controller reached through ``hidapi``.
 
-    def __init__(self, index: int, path: bytes, model: str, serial: str = "") -> None:
+    Output reports (LED colour + rumble) are scheduled rather than written
+    immediately:
+
+    * at most one write every :data:`LED_MIN_WRITE_INTERVAL` (faster writes are
+      dropped by Bluetooth stacks and can even disconnect the controller);
+    * a rumble pulse that starts and ends between two writes is *latched* so it
+      still reaches the motor for one interval;
+    * a keep-alive write every :data:`LED_KEEPALIVE_SECONDS` stops the sphere
+      from switching itself off;
+    * write results are checked - failures are logged and shown in the UI - and
+      on Windows a failed ``hid_write`` switches to the control-pipe method.
+    """
+
+    def __init__(self, index: int, path: bytes, model: str, serial: str = "", led_method: str = "auto") -> None:
         self.model = model
         super().__init__(index)
         self.path = path
         self.state.model = model
         self.state.serial = serial
         self._dev = None
+        self._control = None  # ControlPipeWriter when the fallback is active
+        self.led_method = led_method  # auto | write | control
         self._last_sent: tuple[tuple[int, int, int], float] | None = None
+        self._last_write = 0.0
+        self._rumble_latched = 0.0
+        self.writes_ok = 0
+        self.writes_failed = 0
+        self.output_error = ""
 
     @property
     def key(self) -> str:
@@ -291,20 +302,25 @@ class HidMoveController(MoveController):
         dev.set_nonblocking(1)
         self._dev = dev
         self.state.connected = True
-        self.apply_outputs_now()
+        if self.led_method == "control":
+            self._enable_control_pipe()
 
     def close(self) -> None:
         if self._dev is not None:
             try:
                 self.set_led(0, 0, 0)
                 self.set_rumble(0.0)
-                self.apply_outputs_now()
+                self._write_now(force=True)
                 self._dev.close()
             except Exception:
                 pass
+        if self._control is not None:
+            self._control.close()
+            self._control = None
         self._dev = None
         self.state.connected = False
 
+    # -- input ---------------------------------------------------------------
     def poll(self) -> bool:
         if self._dev is None:
             return False
@@ -335,20 +351,93 @@ class HidMoveController(MoveController):
         st.mag = Vec3(*sample.mag)
         st.touch()
 
-    def _write_led_report(self) -> None:
-        if self._dev is None:
-            return
-        try:
-            self._dev.write(build_led_report(*self._led, self._rumble))
-        except OSError:
-            self.state.connected = False
+    # -- output --------------------------------------------------------------
+    def set_rumble(self, strength: float) -> None:
+        super().set_rumble(strength)
+        if self._rumble > 0.0:
+            # Remember the pulse even if it ends before the next write slot.
+            self._rumble_latched = max(self._rumble_latched, self._rumble)
 
     def flush_outputs(self, force: bool = False) -> None:
-        key = (self._led, self._rumble)
-        if self._last_sent is None or self._last_sent != key:
-            self._last_sent = key
-            force = True
-        super().flush_outputs(force)
+        now = time.monotonic()
+        if not force and now - self._last_write < LED_MIN_WRITE_INTERVAL:
+            return
+        rumble = max(self._rumble, self._rumble_latched)
+        desired = (self._led, rumble)
+        keepalive_due = now - self._last_write >= LED_KEEPALIVE_SECONDS
+        if force or desired != self._last_sent or keepalive_due:
+            self._write_now(force)
+
+    def apply_outputs_now(self) -> None:
+        self.flush_outputs(force=True)
+
+    def _write_now(self, force: bool = False) -> None:
+        if self._dev is None:
+            return
+        rumble = max(self._rumble, self._rumble_latched)
+        report = build_led_report(*self._led, rumble)
+        result = self._send_report(report)
+        self._last_write = time.monotonic()
+        self._rumble_latched = 0.0
+        if result < 0:
+            self.writes_failed += 1
+            self._last_sent = None  # retry on the next slot
+            if self.writes_failed in (1, 10, 100):
+                log.warning("controller %s: LED/rumble write failed (%s); method=%s", self.state.index + 1, self.output_error, self.led_method)
+        else:
+            self.writes_ok += 1
+            self._last_sent = (self._led, rumble)
+            self.output_error = ""
+        self.state.output_status = self.output_status()
+
+    def _send_report(self, report: bytes) -> int:
+        if self._control is not None:
+            try:
+                return self._control.write(report)
+            except Exception as exc:
+                self.output_error = f"control pipe: {exc}"
+                return -1
+        try:
+            result = self._dev.write(report)
+        except Exception as exc:
+            self.output_error = f"hid_write: {exc}"
+            result = -1
+        if result is None:
+            result = len(report)
+        if result < 0:
+            try:
+                err = self._dev.error()
+            except Exception:
+                err = ""
+            self.output_error = f"hid_write failed ({err or 'no detail'})"
+            if self.led_method == "auto" and self._enable_control_pipe():
+                log.info("controller %s: switching LED/rumble writes to the control pipe", self.state.index + 1)
+                return self._send_report(report)
+        return result
+
+    def _enable_control_pipe(self) -> bool:
+        if self._control is not None:
+            return True
+        try:
+            from themover.devices.winhid import ControlPipeWriter
+
+            self._control = ControlPipeWriter(self.path)
+            return True
+        except Exception as exc:
+            log.debug("control pipe unavailable: %s", exc)
+            if self.led_method == "control":
+                self.output_error = f"control pipe unavailable: {exc}"
+            return False
+
+    def output_status(self) -> str:
+        method = "control pipe" if self._control is not None else "hid_write"
+        if self.writes_failed and not self.writes_ok:
+            return f"LED/rumble NOT working: {self.output_error} [{method}]"
+        if self.writes_failed:
+            return f"LED/rumble mostly ok ({self.writes_failed} failed writes) [{method}]"
+        if self.writes_ok:
+            return f"LED/rumble ok [{method}]"
+        return "LED/rumble: nothing written yet"
 
 
 class SimulatedMove(MoveController):

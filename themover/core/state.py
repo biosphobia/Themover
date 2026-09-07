@@ -73,6 +73,7 @@ class MoveState:
     tracker: TrackerState = field(default_factory=TrackerState)
     led: tuple[int, int, int] = (0, 0, 0)
     rumble: float = 0.0
+    output_status: str = ""  # human readable LED/rumble write health
     last_update: float = 0.0
 
     def button(self, name: str) -> bool:

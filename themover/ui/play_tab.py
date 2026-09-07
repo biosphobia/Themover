@@ -1,15 +1,14 @@
-"""Home screen: pick a profile, see the controllers and camera, press Play."""
+"""Home screen: pick a profile, check readiness, press Play."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
-)
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 from themover.profiles import list_profiles
 from themover.ui.camera_view import CameraView
+from themover.ui.checklist import Checklist, build_items
 from themover.ui.context import AppContext
 from themover.ui.controller_card import ControllerCard
+from themover.ui.widgets import WrapLabel
 
 
 class PlayTab(QWidget):
@@ -20,7 +19,7 @@ class PlayTab(QWidget):
 
         left = QVBoxLayout()
         pick = QHBoxLayout()
-        pick.addWidget(QLabel("Profile"))
+        pick.addWidget(QLabel("Game profile"))
         self.profile_combo = QComboBox()
         self.profile_combo.setMinimumWidth(260)
         pick.addWidget(self.profile_combo, 1)
@@ -35,16 +34,17 @@ class PlayTab(QWidget):
         self.play_btn.setCheckable(True)
         self.play_btn.setMinimumHeight(56)
         left.addWidget(self.play_btn)
-        self.hint = QLabel("Tip: hold the PS button on controller 1 to toggle Play from the couch.")
-        self.hint.setObjectName("muted")
-        self.hint.setWordWrap(True)
+        self.hint = WrapLabel("Start your game, press PLAY, then alt-tab into the game. Hold the PS button on controller 1 for a second to pause / resume from the couch.")
         left.addWidget(self.hint)
 
         self.style_box = QTextEdit()
         self.style_box.setReadOnly(True)
         self.style_box.setPlaceholderText("How to play with this profile…")
-        self.style_box.setMaximumHeight(140)
+        self.style_box.setMaximumHeight(130)
         left.addWidget(self.style_box)
+
+        self.checklist = Checklist()
+        left.addWidget(self.checklist)
 
         cards = QHBoxLayout()
         self.cards = [ControllerCard(0), ControllerCard(1)]
@@ -80,6 +80,15 @@ class PlayTab(QWidget):
         self.play_btn.toggled.connect(self._on_play)
         ctx.profile_changed.connect(self._on_profile_changed)
         ctx.armed_changed.connect(self._on_armed)
+        ctx.advanced_changed.connect(self.set_advanced)
+        self.set_advanced(ctx.advanced)
+        self._tick = 0
+
+    def set_advanced(self, on: bool) -> None:
+        for c in self.cards:
+            c.set_advanced(on)
+        self.active.setVisible(on)
+        self.output_status.setVisible(on)
 
     # ---------------------------------------------------------------- slots
     def reload_profiles(self) -> None:
@@ -132,3 +141,6 @@ class PlayTab(QWidget):
             self.cam_status.setText(f"{cam.source.name} · {cam.fps:.0f} fps · wheel {rt.devices.wheel_angle:+.0f}° ({rt.devices.wheel_source})")
         targets = sorted(rt.engine.stats.active_targets)
         self.active.setText(("active: " + ", ".join(targets)) if targets else "")
+        self._tick += 1
+        if self._tick % 10 == 0:  # checklist twice a second is plenty
+            self.checklist.update_items(build_items(self.ctx))

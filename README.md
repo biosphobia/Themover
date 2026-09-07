@@ -20,6 +20,9 @@ AI Coach (Claude) can watch you play for a minute and design a motion mapping fo
   Claude edits the live profile with tools, changes apply instantly.
 - **Regular mapping too**: a full editor for bindings, curves, deadzones, thresholds, feedback rules,
   templates, import/export.
+- **Simple by default, Advanced on demand**: the app shows plain-English mappings ("Strike down with
+  right hand → Key J") and a readiness checklist; the **Advanced** switch in the header reveals raw
+  signal names, every numeric option and all device/engine settings for pro users.
 
 ---
 
@@ -47,14 +50,15 @@ AI Coach (Claude) can watch you play for a minute and design a motion mapping fo
      switched on or off at any time; The Mover rescans every 3 seconds.
 5. **Play**: choose a profile (Driving wheel, Sword & shield, FPS pointer, Boxing, Platformer,
    osu! taiko drums, Generic gamepad, Desktop pointer), start your game, press **PLAY**. Holding
-   the **PS button** on controller 1 for a second toggles Play from the couch.
+   the **PS button** on controller 1 for a second toggles Play from the couch. The *Ready to play?*
+   checklist on the Play tab tells you exactly what is still missing for the chosen profile.
 
 Without any hardware the app still runs with simulated controllers and a synthetic camera so you
 can explore the mapping editor and the AI Coach.
 
 ## 2. AI Coach (Claude)
 
-1. **Settings** → paste your Anthropic API key (console.anthropic.com) → **Save** / **Test key**.
+1. **Setup** → paste your Anthropic API key (console.anthropic.com) → **Save & test**.
    The key is stored only in your user profile folder (`%APPDATA%\TheMover\settings.json`).
 2. **AI Coach** → optionally type the game name and a note ("I want to swing to attack") →
    **Record** → alt-tab into the game and play normally for the countdown. The Mover takes ~1
@@ -65,7 +69,7 @@ can explore the mapping editor and the AI Coach.
    controller signals, add/modify/remove bindings, change feedback rules, colours and sensitivity,
    buzz a controller or save the profile.
 
-Default model: `claude-opus-5` (changeable in Settings). Requests use adaptive thinking, prompt
+Default model: `claude-opus-5` (changeable under Advanced in Setup). Requests use adaptive thinking, prompt
 caching for the stable system prompt, and the server-side refusal fallback, so a declined request
 is automatically retried on a fallback model.
 
@@ -112,15 +116,32 @@ don/kat, Cross = Enter, Circle = Esc, Triangle/Square scroll the song list. The 
 accelerate and stop phases of one strike count as exactly one hit. Tune *Gesture sensitivity*
 (lower = lighter strikes) and *Gesture cooldown* in the Mapping tab, or ask the coach.
 
-## 4. Devices tab
+## 4. Setup tab
 
-- **Sphere colours**: click a sphere in the camera picture to teach the tracker its colour, or pick
-  a colour; the controller LED follows. Defaults are magenta and cyan.
-- **Depth**: stand close → *Set NEAR*, stand back → *Set FAR*.
-- **Re-centre yaw** after pointing both controllers at the screen.
-- **Test rumble + flash** to identify each controller.
-- Auto-calibration learns gyro bias and accelerometer scale whenever a controller rests still for
-  a moment, so no calibration ritual is needed.
+Simple view: controller status with **Identify** (buzz + flash) and **Swap 1 ↔ 2**, the Claude API
+key, and the camera picture (click a sphere to teach the tracker its colour, or pick a colour; the
+controller LED follows).
+
+Advanced view adds: rescan / forget slot assignment, controller backend, **LED / rumble method**,
+re-centre yaw, model / effort / refusal fallback, recording length and screenshot rate, keyboard
+backend, virtual gamepad on/off, engine rate, camera source / index / mirror and depth calibration
+(*Set NEAR* / *Set FAR*).
+
+Auto-calibration learns gyro bias and accelerometer scale whenever a controller rests still for a
+moment, so no calibration ritual is needed.
+
+### LED and rumble
+
+Output reports are sent exactly like psmoveapi / PSMoveService do (49-byte report 0x02), at most
+every 120 ms (Bluetooth stacks drop faster writes and can even disconnect the controller), with a
+keep-alive every 2 s so the sphere stays lit. Short rumble pulses are latched so they always reach
+the motor. Each controller's write health is shown in Setup ("LED/rumble ok [hid_write]"). If it
+says *NOT working*:
+
+1. Make sure PSMoveService is closed (it overrides colours and rumble).
+2. Switch *LED / rumble method* (Advanced) to `control`, which sends reports through the Windows
+   HID control pipe instead of the interrupt pipe. `auto` does this by itself when a write fails.
+3. Check `%APPDATA%\TheMover\themover.log` for the exact error.
 
 ## 5. Running from source
 
@@ -145,9 +166,9 @@ themover/
   mapping/    vocabulary, profile schema, built-in templates, engine, runtime loop
   outputs/    Windows SendInput (scan-codes), pynput fallback, ViGEm virtual gamepad
   ai/         recorder (screen + input), Claude client, analyzer (structured output), chat coach (tool use)
-  ui/         PySide6 app: Play, Mapping, AI Coach, Devices, Settings
+  ui/         PySide6 app: Play (checklist), Mapping (plain-English / advanced), AI Coach, Setup; Advanced switch
   profiles/   user profile library
-tests/        69 unit tests (protocol, discovery/slots, tracker, motion, engine, runtime, AI with a fake client, GUI smoke)
+tests/        76 unit tests (protocol + LED writer, discovery/slots, tracker, motion, engine, runtime, humanizer, AI with a fake client, GUI smoke)
 ```
 
 ## 7. Notes and known limits
@@ -160,3 +181,5 @@ tests/        69 unit tests (protocol, discovery/slots, tracker, motion, engine,
   orientation used for tilt-to-move comes from gravity and is exact.
 - Virtual gamepad output requires ViGEmBus; without it gamepad targets are ignored and keyboard/mouse
   targets still work.
+- The LED/rumble control-pipe fallback and the write diagnostics were written against the Windows
+  HID API documentation, not exercised on real hardware in CI; the Setup tab reports what happens.

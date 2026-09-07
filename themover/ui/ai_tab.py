@@ -119,7 +119,7 @@ class AITab(QWidget):
     # ------------------------------------------------------------ helpers
     def _client_or_warn(self) -> Optional[ClaudeClient]:
         if not self.ctx.settings.effective_api_key:
-            QMessageBox.information(self, "API key needed", "Paste your Anthropic API key in the Settings tab first.")
+            QMessageBox.information(self, "API key needed", "Paste your Anthropic API key in the Setup tab first.")
             return None
         if self._client is None:
             self._client = ClaudeClient(self.ctx.settings)
@@ -215,6 +215,8 @@ class AITab(QWidget):
             msg += f"\n\nDesign notes: {p.notes}"
         if result.problems:
             msg += "\n\n(Some entries were dropped: " + "; ".join(result.problems) + ")"
+        if self.ctx.advanced and result.usage:
+            msg += f"\n\n[{result.model}: {result.usage.get('input_tokens', 0)} in / {result.usage.get('output_tokens', 0)} out tokens]"
         self._append_system(msg)
         self.rec_status.setText(f"Mapping ready: {p.name}. Press Play on the Play tab, or chat below to adjust.")
 

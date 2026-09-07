@@ -125,7 +125,7 @@ class DeviceManager:
             return found
 
     def _open_slot(self, index: int, d: DiscoveredMove) -> bool:
-        ctrl = HidMoveController(index, d.path, d.model, d.serial)
+        ctrl = HidMoveController(index, d.path, d.model, d.serial, led_method=self.settings.led_method)
         try:
             ctrl.open()
         except Exception as exc:
@@ -137,6 +137,7 @@ class DeviceManager:
             old.close()
         except Exception:
             pass
+        # One write only: colour first, then send (back-to-back writes get dropped).
         ctrl.set_led(*self.settings.controller_colors[index])
         ctrl.apply_outputs_now()
         self.controllers[index] = ctrl

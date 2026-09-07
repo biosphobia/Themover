@@ -18,6 +18,7 @@ class AppContext(QObject):
     profile_changed = Signal(object, str)  # Profile, reason
     status = Signal(str)
     armed_changed = Signal(bool)
+    advanced_changed = Signal(bool)
 
     def __init__(self, settings: Settings) -> None:
         super().__init__()
@@ -52,6 +53,16 @@ class AppContext(QObject):
         save_settings(self.settings)
         self.status.emit(f"Saved profile to {path}")
         return str(path)
+
+    # ---------------------------------------------------------- advanced
+    @property
+    def advanced(self) -> bool:
+        return bool(self.settings.advanced_mode)
+
+    def set_advanced(self, on: bool) -> None:
+        self.settings.advanced_mode = bool(on)
+        save_settings(self.settings)
+        self.advanced_changed.emit(bool(on))
 
     # ------------------------------------------------------------- engine
     def set_armed(self, armed: bool) -> None:

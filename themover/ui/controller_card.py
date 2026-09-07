@@ -44,7 +44,9 @@ class ControllerCard(QFrame):
 
         grid = QGridLayout()
         self.gauges: dict[str, Gauge] = {}
-        rows = [("trigger", 0.0, 1.0), ("roll", -90.0, 90.0), ("pitch", -90.0, 90.0), ("yaw", -90.0, 90.0), ("track x", -1.0, 1.0), ("track y", -1.0, 1.0), ("depth", 0.0, 1.0), ("motion", 0.0, 3.0)]
+        self.labels: dict[str, QLabel] = {}
+        rows = [("trigger", 0.0, 1.0), ("motion", 0.0, 3.0), ("roll", -90.0, 90.0), ("pitch", -90.0, 90.0), ("yaw", -90.0, 90.0), ("track x", -1.0, 1.0), ("track y", -1.0, 1.0), ("depth", 0.0, 1.0)]
+        self.simple_rows = {"trigger", "motion"}
         self.ranges = {name: (lo, hi) for name, lo, hi in rows}
         for r, (name, lo, hi) in enumerate(rows):
             lbl = QLabel(name)
@@ -53,12 +55,25 @@ class ControllerCard(QFrame):
             grid.addWidget(lbl, r, 0)
             grid.addWidget(g, r, 1)
             self.gauges[name] = g
+            self.labels[name] = lbl
         grid.setColumnStretch(1, 1)
         layout.addLayout(grid)
         self.buttons = QLabel("")
         self.buttons.setWordWrap(True)
         self.buttons.setMinimumHeight(22)
         layout.addWidget(self.buttons)
+        self.output = QLabel("")
+        self.output.setObjectName("muted")
+        self.output.setWordWrap(True)
+        layout.addWidget(self.output)
+        self.set_advanced(False)
+
+    def set_advanced(self, on: bool) -> None:
+        for name in self.gauges:
+            visible = on or name in self.simple_rows
+            self.gauges[name].setVisible(visible)
+            self.labels[name].setVisible(visible)
+        self.output.setVisible(on)
 
     def update_state(self, st: Optional[MoveState]) -> None:
         if st is None:
@@ -80,3 +95,4 @@ class ControllerCard(QFrame):
             self.gauges[name].set_value(abs(v) if name == "motion" else v, lo, hi)
         pressed = [n for n, d in st.buttons.items() if d]
         self.buttons.setText(("pressed: " + ", ".join(pressed)) if pressed else "")
+        self.output.setText(st.output_status)

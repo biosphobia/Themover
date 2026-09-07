@@ -53,6 +53,7 @@ class Settings:
     )
     controller_backend: str = "auto"  # auto | hid | simulated
     controller_serials: list[str] = field(default_factory=lambda: ["", ""])  # remembered slot assignment
+    led_method: str = "auto"  # auto | write | control  (how LED/rumble reports are sent)
 
     # Engine
     tick_hz: int = 100
@@ -67,6 +68,7 @@ class Settings:
 
     # UI
     start_minimized: bool = False
+    advanced_mode: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

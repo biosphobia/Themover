@@ -11,18 +11,22 @@ from PySide6.QtWidgets import (
 )
 
 from themover.mapping import vocabulary as V
+from themover.mapping.humanize import describe_binding, describe_feedback
 from themover.mapping.profile import Binding, FeedbackRule, Profile
 from themover.mapping.templates import TEMPLATES, load_template
 from themover.ui.context import AppContext
 
 
 class BindingDialog(QDialog):
-    def __init__(self, binding: Optional[Binding] = None, parent=None) -> None:
+    ADVANCED_ROWS = ("Button threshold", "Compare", "Axis input range", "Deadzone", "Scale", "Invert", "Curve", "Smoothing", "Tap length (ms)", "Repeat every (ms)", "Enabled")
+
+    def __init__(self, binding: Optional[Binding] = None, parent=None, advanced: bool = True) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit binding")
         self.setMinimumWidth(460)
         b = binding or Binding("c0.button.move", "key.space")
         form = QFormLayout(self)
+        self.form = form
         self.source = QComboBox(); self.source.setEditable(True); self.source.addItems(V.all_sources()); self.source.setCurrentText(b.source)
         self.target = QComboBox(); self.target.setEditable(True); self.target.addItems(V.all_targets()); self.target.setCurrentText(b.target)
         self.mode = QComboBox(); self.mode.addItems(V.MODES); self.mode.setCurrentText(b.mode)
@@ -55,10 +59,34 @@ class BindingDialog(QDialog):
         form.addRow("Repeat every (ms)", self.repeat_ms)
         form.addRow("Comment", self.comment)
         form.addRow("Enabled", self.enabled)
+        self.preview = QLabel("")
+        self.preview.setObjectName("muted")
+        self.preview.setWordWrap(True)
+        form.addRow("In plain words", self.preview)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        self.source.currentTextChanged.connect(self._update_preview)
+        self.target.currentTextChanged.connect(self._update_preview)
+        self.mode.currentTextChanged.connect(self._update_preview)
+        self._update_preview()
+        self.set_advanced(advanced)
+
+    def set_advanced(self, on: bool) -> None:
+        for row in range(self.form.rowCount()):
+            item = self.form.itemAt(row, QFormLayout.LabelRole)
+            label = item.widget().text() if item is not None and item.widget() is not None else ""
+            if label in self.ADVANCED_ROWS:
+                self.form.setRowVisible(row, on)
+        self.adjustSize()
+
+    def _update_preview(self) -> None:
+        try:
+            what, game, how = describe_binding(self.value())
+            self.preview.setText(f"{what}  →  {game}  ({how})")
+        except Exception:
+            self.preview.setText("")
 
     def _accept(self) -> None:
         b = self.value()
@@ -122,7 +150,8 @@ class FeedbackDialog(QDialog):
 
 
 class MappingTab(QWidget):
-    COLS = ("on", "source", "mode", "target", "options", "comment")
+    COLS = ("on", "what you do", "the game gets", "how", "source", "target", "options", "comment")
+    ADVANCED_COLS = (0, 4, 5, 6)
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -134,11 +163,14 @@ class MappingTab(QWidget):
         self.game_edit = QLineEdit()
         self.game_edit.setPlaceholderText("Game")
         top.addWidget(QLabel("Name")); top.addWidget(self.name_edit, 2)
-        top.addWidget(QLabel("Game")); top.addWidget(self.game_edit, 2)
+        self.game_label = QLabel("Game")
+        top.addWidget(self.game_label); top.addWidget(self.game_edit, 2)
         self.sens = QDoubleSpinBox(); self.sens.setRange(0.2, 3.0); self.sens.setSingleStep(0.1); self.sens.setToolTip("Gesture sensitivity: lower = gestures trigger more easily")
-        top.addWidget(QLabel("Gesture sensitivity")); top.addWidget(self.sens)
+        self.sens_label = QLabel("Gesture sensitivity")
+        top.addWidget(self.sens_label); top.addWidget(self.sens)
         self.cooldown = QSpinBox(); self.cooldown.setRange(30, 2000); self.cooldown.setSuffix(" ms"); self.cooldown.setToolTip("Minimum time between two of the same gesture (80-100 for drumming)")
-        top.addWidget(QLabel("Gesture cooldown")); top.addWidget(self.cooldown)
+        self.cooldown_label = QLabel("Gesture cooldown")
+        top.addWidget(self.cooldown_label); top.addWidget(self.cooldown)
         root.addLayout(top)
 
         tools = QHBoxLayout()
@@ -165,6 +197,7 @@ class MappingTab(QWidget):
         self.table.setHorizontalHeaderLabels([c.title() for c in self.COLS])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -176,8 +209,8 @@ class MappingTab(QWidget):
         self.fb_add = QPushButton("+ Rule"); self.fb_edit = QPushButton("Edit"); self.fb_del = QPushButton("Remove")
         fb_head.addWidget(fb_title); fb_head.addStretch(1); fb_head.addWidget(self.fb_add); fb_head.addWidget(self.fb_edit); fb_head.addWidget(self.fb_del)
         root.addLayout(fb_head)
-        self.fb_table = QTableWidget(0, 4)
-        self.fb_table.setHorizontalHeaderLabels(["Controller", "Trigger", "Effect", "Comment"])
+        self.fb_table = QTableWidget(0, 5)
+        self.fb_table.setHorizontalHeaderLabels(["In plain words", "Controller", "Trigger", "Effect", "Comment"])
         self.fb_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.fb_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.fb_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -197,12 +230,29 @@ class MappingTab(QWidget):
         self.fb_edit.clicked.connect(self._fb_edit)
         self.fb_table.doubleClicked.connect(self._fb_edit)
         self.fb_del.clicked.connect(self._fb_delete)
+        self.coach_hint = QLabel("Tip: the easiest way to change a mapping is to tell the AI Coach what you want (“make jump a flick up”). Turn on Advanced (top right) to edit every number.")
+        self.coach_hint.setObjectName("muted"); self.coach_hint.setWordWrap(True)
+        root.addWidget(self.coach_hint)
+        ctx.advanced_changed.connect(self.set_advanced)
         self.name_edit.editingFinished.connect(self._meta_changed)
         self.game_edit.editingFinished.connect(self._meta_changed)
         self.sens.valueChanged.connect(self._meta_changed)
         self.cooldown.valueChanged.connect(self._meta_changed)
         ctx.profile_changed.connect(self._on_profile_changed)
         self.populate(ctx.profile)
+        self.set_advanced(ctx.advanced)
+
+    def set_advanced(self, on: bool) -> None:
+        for col in self.ADVANCED_COLS:
+            self.table.setColumnHidden(col, not on)
+        for col in (1, 2, 3):
+            self.fb_table.setColumnHidden(col, not on)
+        for w in (self.sens, self.cooldown, self.import_btn, self.export_btn, self.dup_btn, self.game_edit):
+            w.setVisible(on)
+        self.sens_label.setVisible(on)
+        self.cooldown_label.setVisible(on)
+        self.game_label.setVisible(on)
+        self.coach_hint.setVisible(not on)
 
     # ------------------------------------------------------------- render
     def _on_profile_changed(self, profile, reason: str) -> None:
@@ -220,7 +270,8 @@ class MappingTab(QWidget):
         self.table.setRowCount(len(profile.bindings))
         for r, b in enumerate(profile.bindings):
             opts = b.describe().split("(", 1)[1].rstrip(")") if "(" in b.describe() else ""
-            for c, text in enumerate(["✓" if b.enabled else "–", b.source, b.effective_mode(), b.target, opts, b.comment]):
+            what, game, how = describe_binding(b)
+            for c, text in enumerate(["✓" if b.enabled else "–", what, game, how, b.source, b.target, opts, b.comment]):
                 item = QTableWidgetItem(text)
                 if c == 0:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -233,7 +284,7 @@ class MappingTab(QWidget):
                 eff.append(f"rumble {f.rumble:g}" + ("" if f.rumble_from else f" for {f.duration_ms}ms"))
             if f.led:
                 eff.append(f"LED {f.led} for {f.led_duration_ms}ms")
-            for c, text in enumerate([f"P{f.controller + 1}", trig, ", ".join(eff), f.comment]):
+            for c, text in enumerate([describe_feedback(f), f"P{f.controller + 1}", trig, ", ".join(eff), f.comment]):
                 self.fb_table.setItem(r, c, QTableWidgetItem(text))
 
     def _current_row(self) -> int:
@@ -258,7 +309,7 @@ class MappingTab(QWidget):
         self._commit(load_template(key))
 
     def _add(self) -> None:
-        dlg = BindingDialog(parent=self)
+        dlg = BindingDialog(parent=self, advanced=self.ctx.advanced)
         if dlg.exec() == QDialog.Accepted:
             p = self.ctx.profile.copy()
             p.bindings.append(dlg.value())
@@ -268,7 +319,7 @@ class MappingTab(QWidget):
         row = self._current_row()
         if row < 0:
             return
-        dlg = BindingDialog(self.ctx.profile.bindings[row], parent=self)
+        dlg = BindingDialog(self.ctx.profile.bindings[row], parent=self, advanced=self.ctx.advanced)
         if dlg.exec() == QDialog.Accepted:
             p = self.ctx.profile.copy()
             p.bindings[row] = dlg.value()
