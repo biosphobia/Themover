@@ -95,3 +95,30 @@ def test_buzz_survives_feedback_ticks():
         assert st.rumble == 0.0 and st.led == tuple(rt.profile.controllers[1].color)
     finally:
         rt.stop()
+
+
+def test_taiko_profile_strike_taps_key_once():
+    from themover.core.state import Vec3
+
+    rt, sink = make_runtime(load_template("osu_taiko"))
+    rt.start_devices()
+    try:
+        rt.arm()
+        sim = rt.devices.controllers[0]
+        sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
+        for _ in range(60):
+            rt.step(0.01)
+        assert rt.devices.gestures[0].config.cooldown_s == 0.11
+        sim.simulate_motion(Vec3(0, 0, -2.0), Vec3())
+        rt.step(0.01)
+        sim.simulate_motion(Vec3(0, 0, 4.0), Vec3())
+        rt.step(0.01)
+        sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
+        for _ in range(10):
+            time.sleep(0.01)
+            rt.step(0.01)
+        presses = [e for e in sink.events if e == ("key_down", "j")]
+        assert len(presses) == 1
+        assert ("key_up", "j") in sink.events
+    finally:
+        rt.stop()

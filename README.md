@@ -35,14 +35,19 @@ AI Coach (Claude) can watch you play for a minute and design a motion mapping fo
    - **libusb via [Zadig](https://zadig.akeo.ie/)** + `pip install git+https://github.com/bensondaled/pseyepy`
      (only when running from source) - the "pseye" backend.
    Any ordinary webcam also works; tracking only needs to see the glowing spheres.
-4. **Controllers**: pair each PS Move over Bluetooth (once):
-   - Open The Mover → **Devices** → plug the controller in with a mini-USB cable → **Pair via USB**
-     (the PC's Bluetooth address is filled in automatically; type it if not) → unplug → press **PS**.
-   - Windows shows it as *Motion Controller*. If it does not connect within ~10 s, remove it in
-     Bluetooth settings and press PS again.
+4. **Controllers**: pair each PS Move with
+   [PSMoveServiceEx](https://github.com/Timocop/PSMoveServiceEx) (its config tool has a USB pairing
+   step that writes your PC's Bluetooth address into the controller). Once Windows lists a controller
+   as *Motion Controller*, The Mover detects it by itself. The Mover does **not** pair controllers.
+   - Close PSMoveService itself while playing; The Mover talks to the controllers directly and the
+     two would fight over the LEDs and rumble.
+   - The **Devices** tab lists every controller found, which slot it is in (1 = right hand,
+     2 = left hand), and offers **Swap 1 ↔ 2** and **Identify** (buzz + flash). Slots are remembered
+     by Bluetooth address, so each controller keeps its slot across restarts. Controllers can be
+     switched on or off at any time; The Mover rescans every 3 seconds.
 5. **Play**: choose a profile (Driving wheel, Sword & shield, FPS pointer, Boxing, Platformer,
-   Generic gamepad, Desktop pointer), start your game, press **PLAY**. Holding the **PS button**
-   on controller 1 for a second toggles Play from the couch.
+   osu! taiko drums, Generic gamepad, Desktop pointer), start your game, press **PLAY**. Holding
+   the **PS button** on controller 1 for a second toggles Play from the couch.
 
 Without any hardware the app still runs with simulated controllers and a synthetic camera so you
 can explore the mapping editor and the AI Coach.
@@ -98,6 +103,15 @@ Options: `threshold`, `compare`, `input_range`, `deadzone`, `scale`, `invert`, `
 Profiles live in `%APPDATA%\TheMover\profiles\*.json` and can be exported/imported from the
 Mapping tab.
 
+### osu! taiko preset (no camera needed)
+
+Each controller is a drumstick. Strike downward for *don* (right hand = J, left hand = F), swing
+outward for *kat* (right = K, left = D). The trigger and Move button are button fallbacks for
+don/kat, Cross = Enter, Circle = Esc, Triangle/Square scroll the song list. The preset uses a
+110 ms gesture cooldown and 35 ms taps; opposite directions of one axis share the cooldown, so the
+accelerate and stop phases of one strike count as exactly one hit. Tune *Gesture sensitivity*
+(lower = lighter strikes) and *Gesture cooldown* in the Mapping tab, or ask the coach.
+
 ## 4. Devices tab
 
 - **Sphere colours**: click a sphere in the camera picture to teach the tracker its colour, or pick
@@ -127,21 +141,20 @@ The GitHub Actions workflow builds `TheMover.exe` on every push and attaches it 
 ```
 themover/
   core/       state, orientation fusion, gesture detection
-  devices/    PS Move HID protocol + pairing, PS3 Eye / OpenCV / synthetic camera, sphere tracker, device manager
+  devices/    PS Move HID protocol, controller discovery + stable slots, PS3 Eye / OpenCV / synthetic camera, sphere tracker
   mapping/    vocabulary, profile schema, built-in templates, engine, runtime loop
   outputs/    Windows SendInput (scan-codes), pynput fallback, ViGEm virtual gamepad
   ai/         recorder (screen + input), Claude client, analyzer (structured output), chat coach (tool use)
   ui/         PySide6 app: Play, Mapping, AI Coach, Devices, Settings
   profiles/   user profile library
-tests/        59 unit tests (protocol, tracker, motion, engine, runtime, AI with a fake client, GUI smoke)
+tests/        69 unit tests (protocol, discovery/slots, tracker, motion, engine, runtime, AI with a fake client, GUI smoke)
 ```
 
 ## 7. Notes and known limits
 
-- Bluetooth on Windows: the Microsoft stack sometimes refuses the first PS Move connection. If
-  pairing via USB does not lead to a connection, install the controller through Bluetooth settings
-  once, or use a controller already paired by other tools; The Mover only needs it to show up as an
-  HID device. Wired USB also works for testing (no motion sphere tracking difference).
+- Bluetooth pairing is done by PSMoveServiceEx (or psmoveapi's `psmove pair`), not by The Mover;
+  The Mover only needs the controller to show up as a Bluetooth HID device. A controller plugged in
+  over USB is detected too, but Bluetooth ones take the slots first.
 - The PS4-era Move (CECH-ZCM2) is supported for buttons and IMU; its magnetometer is absent.
 - Gyro scale is approximate until a controller has rested still once (auto-calibration); the
   orientation used for tilt-to-move comes from gravity and is exact.

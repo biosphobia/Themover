@@ -1,4 +1,4 @@
-"""Devices: controllers, pairing, camera, colours, calibration, tests."""
+"""Devices: controller detection, camera, colours, calibration, tests."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor
 
 from themover.config import save_settings
-from themover.devices.psmove import HidMoveController, enumerate_controllers, host_bluetooth_address
+from themover.devices.psmove import HidMoveController
 from themover.ui.camera_view import CameraView
 from themover.ui.context import AppContext
 
@@ -44,19 +44,24 @@ class DevicesTab(QWidget):
         cl.addWidget(self.recenter_btn)
         left.addWidget(card)
 
-        # -------------------------------------------------------- pairing
-        pair = QFrame(); pair.setObjectName("card"); pl = QVBoxLayout(pair)
-        pt = QLabel("Pair a controller over Bluetooth"); pt.setObjectName("h2"); pl.addWidget(pt)
-        info = QLabel("Plug the controller in with a mini-USB cable, click Pair, unplug, then press its PS button. "
-                      "The controller remembers this PC's Bluetooth address and connects on its own next time.")
-        info.setObjectName("muted"); info.setWordWrap(True); pl.addWidget(info)
-        prow = QHBoxLayout()
-        self.host_addr = QLineEdit(host_bluetooth_address() or ""); self.host_addr.setPlaceholderText("this PC's Bluetooth address (aa:bb:cc:dd:ee:ff)")
-        self.pair_btn = QPushButton("Pair via USB")
-        prow.addWidget(self.host_addr, 1); prow.addWidget(self.pair_btn)
-        pl.addLayout(prow)
-        self.pair_status = QLabel(""); self.pair_status.setWordWrap(True); pl.addWidget(self.pair_status)
-        left.addWidget(pair)
+        # ------------------------------------------------ detected list
+        det = QFrame(); det.setObjectName("card"); dl = QVBoxLayout(det)
+        dt = QLabel("Detected PS Move controllers"); dt.setObjectName("h2"); dl.addWidget(dt)
+        info = QLabel("Pair your controllers with PSMoveServiceEx (its pairing tool writes the PC's Bluetooth address into the "
+                      "controller). Once Windows lists them as 'Motion Controller', The Mover picks them up automatically, even while "
+                      "it is running. Close PSMoveService itself while playing so it does not fight over the LEDs and rumble. "
+                      "Each controller keeps its slot (1 = right hand, 2 = left hand); use Swap if they come up the wrong way round.")
+        info.setObjectName("muted"); info.setWordWrap(True); dl.addWidget(info)
+        self.detected = QLabel("scanning…"); self.detected.setWordWrap(True); dl.addWidget(self.detected)
+        drow2 = QHBoxLayout()
+        self.swap_btn = QPushButton("Swap 1 ↔ 2"); self.forget_btn = QPushButton("Forget slot assignment")
+        self.identify_btns = [QPushButton("Identify 1"), QPushButton("Identify 2")]
+        drow2.addWidget(self.swap_btn); drow2.addWidget(self.forget_btn)
+        for b in self.identify_btns:
+            drow2.addWidget(b)
+        drow2.addStretch(1)
+        dl.addLayout(drow2)
+        left.addWidget(det)
         left.addStretch(1)
 
         # --------------------------------------------------------- camera
@@ -89,7 +94,10 @@ class DevicesTab(QWidget):
         for i, b in enumerate(self.test_btns):
             b.clicked.connect(lambda _=False, i=i: self.ctx.buzz(i, 1.0, (255, 255, 255), 400))
         self.recenter_btn.clicked.connect(lambda: self.ctx.runtime.devices.reset_yaw())
-        self.pair_btn.clicked.connect(self._pair)
+        self.swap_btn.clicked.connect(self._swap)
+        self.forget_btn.clicked.connect(self._forget)
+        for i, b in enumerate(self.identify_btns):
+            b.clicked.connect(lambda _=False, i=i: self.ctx.buzz(i, 1.0, (255, 255, 255), 600))
         self.reconnect_btn.clicked.connect(self._reconnect_camera)
         self.camera.clicked.connect(self._sample_color)
         self.near_btn.clicked.connect(lambda: self._set_depth("near"))
@@ -103,7 +111,8 @@ class DevicesTab(QWidget):
             b.setStyleSheet(f"background: rgb({r},{g},{bl}); color: {'#000' if (r + g + bl) > 380 else '#fff'};")
 
     def _rescan(self) -> None:
-        self.ctx.runtime.devices.open_controllers()
+        self.ctx.runtime.devices.rescan(force=True)
+        save_settings(self.ctx.settings)
         self.refresh()
 
     def _backend_changed(self, text: str) -> None:
@@ -153,29 +162,15 @@ class DevicesTab(QWidget):
         save_settings(s)
         self.ctx.runtime.devices.open_camera()
 
-    def _pair(self) -> None:
-        host = self.host_addr.text().strip()
-        if not host:
-            QMessageBox.warning(self, "Bluetooth address", "Enter this PC's Bluetooth adapter address first (Settings → Bluetooth → adapter properties).")
-            return
-        usb = [d for d in enumerate_controllers() if d.interface == "usb"]
-        if not usb:
-            self.pair_status.setText("No controller found over USB. Plug it in with a mini-USB cable and try again.")
-            return
-        results = []
-        for d in usb:
-            ctrl = HidMoveController(9, d.path, d.model, d.serial)
-            try:
-                ctrl.open()
-                before = ctrl.read_bt_addresses()
-                ctrl.set_host_address(host)
-                after = ctrl.read_bt_addresses()
-                results.append(f"{d.model.upper()} {after[0]}: host {before[1]} → {after[1]}")
-            except Exception as exc:
-                results.append(f"{d.model.upper()}: failed ({exc})")
-            finally:
-                ctrl.close()
-        self.pair_status.setText("\n".join(results) + "\n\nNow unplug the controller and press its PS button. On Windows, if it does not connect within ~10 s, open Bluetooth settings and remove/re-add 'Motion Controller'.")
+    def _swap(self) -> None:
+        self.ctx.runtime.devices.swap_controllers()
+        save_settings(self.ctx.settings)
+        self.refresh()
+
+    def _forget(self) -> None:
+        self.ctx.runtime.devices.forget_assignment()
+        save_settings(self.ctx.settings)
+        self._rescan()
 
     # ----------------------------------------------------------- refresh
     def refresh(self) -> None:
@@ -183,9 +178,21 @@ class DevicesTab(QWidget):
         lines = []
         for i, c in enumerate(dev.controllers):
             st = c.state
-            kind = "simulated" if st.model == "simulated" else f"PS Move {st.model.upper()} {st.serial}"
-            lines.append(f"Controller {i + 1}: {kind} · {'charging' if st.charging else f'battery {int(st.battery * 100)}%'} · {'tracked' if st.tracker.tracked else 'not tracked'}")
+            kind = "simulated (no controller in this slot)" if st.model == "simulated" else f"PS Move {st.model.upper()} {st.serial}"
+            live = f"trigger {st.trigger:.2f} · roll {st.roll:+.0f}° · pitch {st.pitch:+.0f}°"
+            lines.append(f"Controller {i + 1}: {kind} · {'charging' if st.charging else f'battery {int(st.battery * 100)}%'} · {'tracked' if st.tracker.tracked else 'not tracked'}\n    {live}")
         self.ctrl_status.setText("\n".join(lines) or "no controllers")
+        slots = {c.key: i for i, c in enumerate(dev.controllers) if isinstance(c, HidMoveController)}
+        if dev.discovered:
+            rows = []
+            for d in dev.discovered:
+                slot = slots.get(d.key)
+                rows.append(f"• {d.label}  →  " + (f"slot {slot + 1}" if slot is not None else "not assigned (only 2 slots)"))
+            self.detected.setText("\n".join(rows))
+        elif self.ctx.settings.controller_backend == "simulated":
+            self.detected.setText("Backend is 'simulated'; switch to 'auto' to use real controllers.")
+        else:
+            self.detected.setText("No PS Move found yet. Pair it with PSMoveServiceEx, press its PS button and wait a few seconds; The Mover rescans every 3 s.")
         self.camera.show_frame(dev.latest_frame())
         if dev.camera is not None and not self.cam_status.text().startswith(("Controller", "Depth")):
             self.cam_status.setText(f"{dev.camera.source.name} · {dev.camera.fps:.0f} fps")

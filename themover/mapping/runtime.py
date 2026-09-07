@@ -60,6 +60,8 @@ class Runtime:
                 g.config.swing_threshold_g = 1.1 * sens
                 g.config.thrust_threshold_g = 1.4 * sens
                 g.config.flick_threshold_dps = 400.0 * sens
+                g.config.cooldown_s = max(0.03, min(2.0, (profile.gesture_cooldown_ms or 220) / 1000.0))
+                g.config.pulse_s = min(0.12, g.config.cooldown_s * 0.8)
 
     def _build_sink(self) -> OutputSink:
         if self._external_sink is not None:

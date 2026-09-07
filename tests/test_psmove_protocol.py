@@ -79,17 +79,6 @@ def test_led_report_layout():
     assert P.build_led_report(300, -5, 0, 2.0)[2:5] == bytes([255, 0, 0])
 
 
-def test_bluetooth_address_roundtrip():
-    host = "aa:bb:cc:dd:ee:ff"
-    rep = P.build_set_host_report(host)
-    assert rep[0] == P.REQ_SET_BTADDR and len(rep) == 23
-    assert rep[1:7] == bytes.fromhex("ffeeddccbbaa")
-    data = bytes([0x04]) + bytes.fromhex("665544332211") + bytes(3) + bytes.fromhex("ffeeddccbbaa")
-    ctrl, hst = P.decode_btaddr_report(data)
-    assert ctrl == "11:22:33:44:55:66" and hst == host
-    assert len(P.build_set_host_report(host, "zcm2")) == 7
-
-
 def test_auto_calibration_learns_scale_and_bias():
     cal = P.AutoCalibration(accel_units_per_g=4300.0, gyro_rad_per_unit=0.001)
     for _ in range(1200):

@@ -15,6 +15,7 @@ from themover.core.gestures import GestureDetector
 from themover.core.state import MoveState, WorldState
 from themover.devices.camera import CameraSource, CameraThread, open_camera
 from themover.devices.psmove import (
+    DiscoveredMove,
     HidMoveController,
     MoveController,
     SimulatedMove,
@@ -25,6 +26,7 @@ from themover.devices.tracker import ColorTarget, SphereTracker
 log = logging.getLogger(__name__)
 
 NUM_CONTROLLERS = 2
+RESCAN_INTERVAL_S = 3.0
 
 
 class DeviceManager:
@@ -46,6 +48,8 @@ class DeviceManager:
         self.on_status: Optional[Callable[[str], None]] = None
         self.wheel_angle = 0.0  # degrees, from the two tracked spheres or roll of P1
         self.wheel_source = "roll"
+        self.discovered: list[DiscoveredMove] = []
+        self._last_rescan = 0.0
 
     # ------------------------------------------------------------------ setup
     def _status(self, text: str) -> None:
@@ -57,30 +61,139 @@ class DeviceManager:
             except Exception:
                 pass
 
+    # ---------------------------------------------------------- controllers
+    def _slot_key(self, index: int) -> str:
+        """Identity (serial/path) of the real controller currently in a slot, or ''."""
+        if index < len(self.controllers):
+            ctrl = self.controllers[index]
+            if isinstance(ctrl, HidMoveController) and ctrl.state.connected:
+                return ctrl.key
+        return ""
+
     def open_controllers(self) -> None:
+        """(Re)build both slots from scratch."""
         with self._lock:
             self.close_controllers()
-            found = enumerate_controllers() if self.settings.controller_backend in ("auto", "hid") else []
+            self.controllers = [SimulatedMove(i) for i in range(NUM_CONTROLLERS)]
+            for i, ctrl in enumerate(self.controllers):
+                ctrl.set_led(*self.settings.controller_colors[i])
+            self.rescan(force=True)
+
+    def rescan(self, force: bool = False) -> list[DiscoveredMove]:
+        """Look for PS Move controllers and fill empty slots.
+
+        Slots are stable: a controller keeps the slot it had last time (remembered
+        by Bluetooth address in the settings).  Unknown controllers take the first
+        free slot.  Slots with nothing real in them run a simulated controller.
+        """
+        with self._lock:
+            self._last_rescan = time.monotonic()
+            if self.settings.controller_backend == "simulated":
+                self.discovered = []
+                return []
+            found = enumerate_controllers()
+            self.discovered = found
+            if not self.controllers:
+                self.controllers = [SimulatedMove(i) for i in range(NUM_CONTROLLERS)]
+            remembered = list(self.settings.controller_serials or ["", ""])
+            while len(remembered) < NUM_CONTROLLERS:
+                remembered.append("")
+            in_use = {self._slot_key(i) for i in range(NUM_CONTROLLERS)} - {""}
+            available = [d for d in found if d.key not in in_use]
+            changed = False
+
+            # Pass 1: controllers that remember their slot.
             for i in range(NUM_CONTROLLERS):
-                ctrl: MoveController
-                if i < len(found) and self.settings.controller_backend != "simulated":
-                    d = found[i]
-                    ctrl = HidMoveController(i, d.path, d.model, d.serial)
-                    try:
-                        ctrl.open()
-                        self._status(f"Controller {i + 1}: PS Move ({d.model.upper()}, {d.interface})")
-                    except Exception as exc:
-                        log.warning("controller %s failed to open: %s", i, exc)
-                        ctrl = SimulatedMove(i)
-                        self._status(f"Controller {i + 1}: could not open ({exc}); using simulated")
-                else:
-                    ctrl = SimulatedMove(i)
-                    self._status(f"Controller {i + 1}: simulated (no PS Move found)")
-                color = self.settings.controller_colors[i]
-                ctrl.set_led(*color)
-                self.controllers.append(ctrl)
-            for ctrl in self.controllers:
+                if self._slot_key(i):
+                    continue
+                match = next((d for d in available if remembered[i] and d.key == remembered[i]), None)
+                if match is not None:
+                    available.remove(match)
+                    changed |= self._open_slot(i, match)
+            # Pass 2: anything else goes into the first free slot.
+            for i in range(NUM_CONTROLLERS):
+                if self._slot_key(i) or not available:
+                    continue
+                d = available.pop(0)
+                if self._open_slot(i, d):
+                    remembered[i] = d.key
+                    changed = True
+            if remembered != list(self.settings.controller_serials or []):
+                self.settings.controller_serials = remembered
+            if changed or force:
+                self._announce_controllers()
+            return found
+
+    def _open_slot(self, index: int, d: DiscoveredMove) -> bool:
+        ctrl = HidMoveController(index, d.path, d.model, d.serial)
+        try:
+            ctrl.open()
+        except Exception as exc:
+            log.warning("controller %s (%s) failed to open: %s", index + 1, d.label, exc)
+            self._status(f"Controller {index + 1}: {d.label} could not be opened ({exc})")
+            return False
+        old = self.controllers[index]
+        try:
+            old.close()
+        except Exception:
+            pass
+        ctrl.set_led(*self.settings.controller_colors[index])
+        ctrl.apply_outputs_now()
+        self.controllers[index] = ctrl
+        self.filters[index] = OrientationFilter()
+        self.gestures[index] = GestureDetector(config=self.gestures[index].config)
+        log.info("controller %s <- %s", index + 1, d.label)
+        return True
+
+    def _announce_controllers(self) -> None:
+        parts = []
+        for i, ctrl in enumerate(self.controllers):
+            if isinstance(ctrl, HidMoveController) and ctrl.state.connected:
+                parts.append(f"Controller {i + 1}: {ctrl.state.model.upper()} {ctrl.state.serial or ''}".rstrip())
+            else:
+                parts.append(f"Controller {i + 1}: simulated")
+        self._status(" · ".join(parts))
+
+    def swap_controllers(self) -> None:
+        """Exchange slots 1 and 2 (and remember the new assignment)."""
+        with self._lock:
+            if len(self.controllers) < 2:
+                return
+            a, b = self.controllers[0], self.controllers[1]
+            self.controllers[0], self.controllers[1] = b, a
+            for i, ctrl in enumerate(self.controllers):
+                ctrl.state.index = i
+                ctrl.set_led(*self.settings.controller_colors[i])
                 ctrl.apply_outputs_now()
+            self.filters.reverse()
+            self.gestures.reverse()
+            serials = list(self.settings.controller_serials or ["", ""])
+            while len(serials) < 2:
+                serials.append("")
+            self.settings.controller_serials = [serials[1], serials[0]]
+            self._announce_controllers()
+
+    def forget_assignment(self) -> None:
+        self.settings.controller_serials = ["", ""]
+
+    def _drop_disconnected(self) -> bool:
+        """Replace controllers that vanished with simulated ones; True if any did."""
+        dropped = False
+        for i, ctrl in enumerate(self.controllers):
+            if isinstance(ctrl, HidMoveController) and not ctrl.state.connected:
+                log.warning("controller %s disconnected", i + 1)
+                try:
+                    ctrl.close()
+                except Exception:
+                    pass
+                sim = SimulatedMove(i)
+                sim.set_led(*self.settings.controller_colors[i])
+                self.controllers[i] = sim
+                dropped = True
+        return dropped
+
+    def real_controller_count(self) -> int:
+        return sum(1 for c in self.controllers if isinstance(c, HidMoveController) and c.state.connected)
 
     def close_controllers(self) -> None:
         for ctrl in self.controllers:
@@ -130,6 +243,14 @@ class DeviceManager:
         dt = max(1e-4, min(0.1, now - self._last_tick))
         self._last_tick = now
         with self._lock:
+            if self._drop_disconnected():
+                self._announce_controllers()
+            if (
+                self.settings.controller_backend != "simulated"
+                and self.real_controller_count() < NUM_CONTROLLERS
+                and now - self._last_rescan >= RESCAN_INTERVAL_S
+            ):
+                self.rescan()
             for i, ctrl in enumerate(self.controllers):
                 ctrl.poll()
                 st = ctrl.state
