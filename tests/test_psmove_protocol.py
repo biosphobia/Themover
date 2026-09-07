@@ -173,3 +173,50 @@ def test_failed_writes_are_reported_and_retried(monkeypatch):
     c.flush_outputs()  # retried even though the desired state did not change
     assert len(dev.writes) == 2
     assert c.state.connected  # a failed LED write must not drop the controller
+
+
+def test_both_imu_frames_are_parsed_oldest_first():
+    rep = bytearray(make_report(accel=(10, 20, 30), gyro=(1, 2, 3)))
+    # frame 0 lives at 14..19 / 26..31; give it different values
+    for i, v in enumerate((100, 200, 300)):
+        rep[14 + 2 * i] = (v + 0x8000) & 0xFF
+        rep[15 + 2 * i] = ((v + 0x8000) >> 8) & 0xFF
+    frames = P.parse_input_frames(bytes(rep))
+    assert [f.accel for f in frames] == [(100, 200, 300), (10, 20, 30)]
+    assert frames[1].gyro == (1, 2, 3)
+    assert P.parse_input_frames(b"\x07" + bytes(48)) == []
+
+
+def test_reader_thread_delivers_frames(monkeypatch):
+    import threading
+    import time as _time
+
+    class RDev(_Dev):
+        def __init__(self):
+            super().__init__()
+            self.reports = [make_report(accel=(0, 4300, 0), trigger=255, buttons4=0x40)]
+
+        def read(self, n, timeout=None):
+            if self.reports:
+                return list(self.reports.pop(0))
+            _time.sleep(0.005)
+            return []
+
+    dev = RDev()
+    c = _controller(monkeypatch, dev)
+    got = []
+    done = threading.Event()
+
+    def on_frame(accel, gyro, t, trigger, move):
+        got.append((accel, t, trigger, move))
+        if len(got) == 2:
+            done.set()
+
+    c.on_frame = on_frame
+    c.start_reader()
+    assert done.wait(1.0)
+    assert not c.poll()  # the reader owns the device now
+    c.stop_reader()
+    assert len(got) == 2 and got[0][1] < got[1][1] and abs((got[1][1] - got[0][1]) - 0.0057) < 1e-6
+    assert got[1][2] == 1.0 and got[1][3] is True
+    assert abs(got[1][0].y - 1.0) < 0.05 and c.state.trigger == 1.0 and c.reports == 1

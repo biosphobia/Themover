@@ -130,14 +130,48 @@ Options: `threshold`, `compare`, `input_range`, `deadzone`, `scale`, `invert`, `
 Profiles live in `%APPDATA%\TheMover\profiles\*.json` and can be exported/imported from the
 Mapping tab.
 
-### osu! taiko preset (no camera needed)
+### osu! taiko (rhythm games): how hits are detected
 
-Each controller is a drumstick. Strike downward for *don* (right hand = J, left hand = F), swing
-outward for *kat* (right = K, left = D). The trigger and Move button are button fallbacks for
-don/kat, Cross = Enter, Circle = Esc, Triangle/Square scroll the song list. The preset uses a
-110 ms gesture cooldown and 35 ms taps; opposite directions of one axis share the cooldown, so the
-accelerate and stop phases of one strike count as exactly one hit. Tune *Gesture sensitivity*
-(lower = lighter strikes) and *Gesture cooldown* in the Mapping tab, or ask the coach.
+Rhythm games are a special case because timing accuracy and latency decide everything. A typical
+Oni chart runs 170 BPM 1/4 streams (a note every 88 ms, 176 ms per hand when alternating) with the
+colour switching don/kat inside the stream, and at OD 5 a GREAT is only ±35 ms wide. The generic
+gesture path (threshold on a smoothed magnitude, evaluated on the engine tick) is not good enough
+for that, so drum hits use their own pipeline:
+
+1. **Every IMU frame is used.** Each Bluetooth report carries two accelerometer frames (~5.7 ms
+   apart); both are decoded, not just the newest one.
+2. **A reader thread per controller.** While a rhythm profile is active, each controller gets a
+   dedicated thread that blocks on the HID read and processes a report the moment it arrives,
+   instead of waiting for the next engine tick.
+3. **The hit is the stop of the stroke.** An air-drum stroke is an acceleration lobe in the
+   direction of motion, a short cruise, then a sharp spike in the *opposite* direction as the arm
+   stops. That stop is what you feel as the hit and is by far the sharpest feature, so the hit fires
+   on the first frame of the stop lobe. Because the spike is so steep, soft and hard strokes fire at
+   the same phase (jitter is one frame, not "whenever the swing crossed a threshold").
+4. **Don or kat comes from the stroke direction relative to gravity.** Straight down (within 40°)
+   is don, angled outward or sideways is kat, upward strokes (the rebound) never fire. Holding the
+   trigger forces kat and holding Move forces don, for players who prefer a modifier. This works in
+   any grip because gravity is measured, not assumed.
+5. **No double hits, no hijacked strokes.** An onset must last two consecutive frames in a
+   consistent direction, so the single-frame blip of a rebound cannot start a false stroke, and a
+   sustained acceleration in a new direction re-arms the detector so a don→kat switch mid-stream
+   registers with the correct colour. A 45 ms refractory period follows every hit.
+6. **Keys are pressed on the reader thread.** `cN.hit.don/kat/any` bindings in tap mode bypass the
+   mapping tick entirely: the key goes down inside the hit callback and a timer releases it 30 ms
+   later. The rest of the profile (menus, rumble) still runs on the normal engine.
+
+Simulating a full 1448-note Oni chart (1510 strokes including big notes) through the detector gives
+every stroke detected, no extra hits, no wrong colours and a timing error of ±2.9 ms. On real
+hardware the remaining fixed delay is the Bluetooth transport plus half a report (roughly 10 to 25 ms)
+and the jitter is about one report period; run osu!'s **offset wizard** once so the constant part
+is absorbed by the game's offset. The controller cards on the Play tab show the hit count, the last
+hit and the report rate (about 85 Hz per controller over Bluetooth) so you can check a controller
+before a map.
+
+Preset keys: right hand J (don) / K (kat), left hand F (don) / D (kat), Cross = Enter, Circle = Esc,
+Triangle / Square scroll the song list, F2 random, ` quick retry. Rumble thumps on every hit.
+Tune with the coach ("hits register too easily" lowers sensitivity) or, in Advanced, edit the
+bindings directly.
 
 ## 4. Setup tab
 
@@ -184,14 +218,14 @@ The GitHub Actions workflow builds `TheMover.exe` on every push and attaches it 
 
 ```
 themover/
-  core/       state, orientation fusion, gesture detection
+  core/       state, orientation fusion, gesture detection, drum-hit detection (rhythm games)
   devices/    PS Move HID protocol, controller discovery + stable slots, PS3 Eye / OpenCV / synthetic camera, sphere tracker
   mapping/    vocabulary, profile schema, built-in templates, engine, runtime loop
   outputs/    Windows SendInput (scan-codes), pynput fallback, ViGEm virtual gamepad
   ai/         recorder (screen + input), Claude client, analyzer (structured analysis + profile), chat coach (tool use), coach log
   ui/         PySide6 app: Play (checklist), Mapping (plain-English / advanced), AI Coach, Setup; Advanced switch
   profiles/   user profile library
-tests/        78 unit tests (protocol + LED writer, discovery/slots, tracker, motion, engine, runtime, humanizer, AI + coach log with a fake client, GUI smoke)
+tests/        90 unit tests (protocol + LED writer + reader thread, discovery/slots, tracker, motion, drum hits, engine + fast path, runtime, humanizer, AI + coach log with a fake client, GUI smoke)
 ```
 
 ## 7. Notes and known limits

@@ -18,8 +18,12 @@ from typing import Optional
 from themover.core.state import BUTTON_NAMES, MoveState, Vec3
 
 import logging
+import threading
+from typing import Callable
 
 log = logging.getLogger(__name__)
+
+FrameCallback = Callable[[Vec3, Vec3, float, float, bool], None]  # accel, gyro, t, trigger, move
 
 try:  # hidapi is optional so the app can start without it (simulated mode).
     import hid  # type: ignore
@@ -110,30 +114,41 @@ class RawSample:
     timestamp: int
 
 
+def _imu_frame(report: bytes, model: str, frame: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Accelerometer + gyroscope of frame 0 (older) or 1 (newer) of a report."""
+    a_off = 14 + 6 * frame
+    g_off = 26 + 6 * frame
+    if model == "zcm2":
+        accel = (_s16(report, a_off), _s16(report, a_off + 2), _s16(report, a_off + 4))
+        gyro = (_s16(report, g_off), _s16(report, g_off + 2), _s16(report, g_off + 4))
+    else:
+        accel = (_u16(report, a_off) - 0x8000, _u16(report, a_off + 2) - 0x8000, _u16(report, a_off + 4) - 0x8000)
+        gyro = (_u16(report, g_off) - 0x8000, _u16(report, g_off + 2) - 0x8000, _u16(report, g_off + 4) - 0x8000)
+    return accel, gyro
+
+
+def parse_input_frames(report: bytes, model: str = "zcm1") -> list[RawSample]:
+    """Both IMU frames of a report, oldest first (each report carries two ~5.7 ms apart)."""
+    latest = parse_input_report(report, model)
+    if latest is None:
+        return []
+    accel0, gyro0 = _imu_frame(report, model, 0)
+    older = RawSample(latest.buttons, latest.trigger, latest.battery_raw, accel0, gyro0, latest.mag, latest.temperature, latest.timestamp)
+    return [older, latest]
+
+
 def parse_input_report(report: bytes, model: str = "zcm1") -> Optional[RawSample]:
-    """Decode a 49+ byte input report.  Returns ``None`` for foreign reports."""
+    """Decode a 49+ byte input report (newest IMU frame).  ``None`` for foreign reports."""
     if len(report) < 45 or report[0] != REQ_GET_INPUT:
         return None
     buttons = decode_buttons(report)
     trigger = (report[5] + report[6]) // 2
     battery_raw = report[13]
+    accel, gyro = _imu_frame(report, model, 1)
     if model == "zcm2":
-        accel = (_s16(report, 20), _s16(report, 22), _s16(report, 24))
-        gyro = (_s16(report, 32), _s16(report, 34), _s16(report, 36))
         mag = (0, 0, 0)
         temperature = (report[38] << 4) | (report[39] >> 4)
     else:
-        # Use the second (most recent) frame of each sensor.
-        accel = (
-            _u16(report, 20) - 0x8000,
-            _u16(report, 22) - 0x8000,
-            _u16(report, 24) - 0x8000,
-        )
-        gyro = (
-            _u16(report, 32) - 0x8000,
-            _u16(report, 34) - 0x8000,
-            _u16(report, 36) - 0x8000,
-        )
         mag = (
             _twelve_bit_signed(((report[39] & 0x0F) << 8) | report[40]),
             _twelve_bit_signed((report[41] << 4) | ((report[42] & 0xF0) >> 4)),
@@ -289,6 +304,12 @@ class HidMoveController(MoveController):
         self.writes_ok = 0
         self.writes_failed = 0
         self.output_error = ""
+        self._reader: Optional[threading.Thread] = None
+        self._reader_stop = threading.Event()
+        self.on_frame: Optional[FrameCallback] = None
+        self.reports = 0
+        self.report_rate = 0.0
+        self._last_report_t = 0.0
 
     @property
     def key(self) -> str:
@@ -306,6 +327,7 @@ class HidMoveController(MoveController):
             self._enable_control_pipe()
 
     def close(self) -> None:
+        self.stop_reader()
         if self._dev is not None:
             try:
                 self.set_led(0, 0, 0)
@@ -322,8 +344,8 @@ class HidMoveController(MoveController):
 
     # -- input ---------------------------------------------------------------
     def poll(self) -> bool:
-        if self._dev is None:
-            return False
+        if self._dev is None or self._reader is not None:
+            return False  # the reader thread applies samples as they arrive
         changed = False
         # Drain everything queued so we always act on the freshest sample.
         for _ in range(8):
@@ -334,12 +356,60 @@ class HidMoveController(MoveController):
                 return changed
             if not data:
                 break
-            sample = parse_input_report(bytes(data), self.model)
-            if sample is None:
-                continue
-            self._apply_sample(sample)
-            changed = True
+            changed |= self._handle_report(bytes(data))
         return changed
+
+    def _handle_report(self, report: bytes) -> bool:
+        frames = parse_input_frames(report, self.model)
+        if not frames:
+            return False
+        now = time.monotonic()
+        if self._last_report_t:
+            dt = now - self._last_report_t
+            if 0 < dt < 1.0:
+                self.report_rate = 0.95 * self.report_rate + 0.05 * (1.0 / dt)
+        self._last_report_t = now
+        self.reports += 1
+        latest = frames[-1]
+        self._apply_sample(latest)
+        if self.on_frame is not None:
+            # Both IMU frames, oldest first; the older one is ~5.7 ms before "now".
+            trig = latest.trigger / 255.0
+            move = bool(latest.buttons.get("move"))
+            for i, fr in enumerate(frames):
+                accel, gyro = self.calibration.convert(fr.accel, fr.gyro)
+                t = now - (0.0057 if i == 0 else 0.0)
+                try:
+                    self.on_frame(accel, gyro, t, trig, move)
+                except Exception as exc:  # never let a callback kill the reader
+                    log.debug("on_frame failed: %s", exc)
+        return True
+
+    # -- low-latency reader thread ------------------------------------------
+    def start_reader(self) -> None:
+        """Read reports on a dedicated thread as soon as they arrive (rhythm games)."""
+        if self._reader is not None or self._dev is None:
+            return
+        self._reader_stop.clear()
+        self._reader = threading.Thread(target=self._reader_loop, name=f"psmove-{self.state.index + 1}", daemon=True)
+        self._reader.start()
+
+    def stop_reader(self) -> None:
+        if self._reader is None:
+            return
+        self._reader_stop.set()
+        self._reader.join(timeout=1.0)
+        self._reader = None
+
+    def _reader_loop(self) -> None:
+        while not self._reader_stop.is_set() and self._dev is not None:
+            try:
+                data = self._dev.read(64, 20)  # blocks up to 20 ms
+            except (OSError, ValueError):
+                self.state.connected = False
+                break
+            if data:
+                self._handle_report(bytes(data))
 
     def _apply_sample(self, sample: RawSample) -> None:
         st = self.state

@@ -12,7 +12,8 @@ import numpy as np
 from themover.config import Settings
 from themover.core.fusion import OrientationFilter
 from themover.core.gestures import GestureDetector
-from themover.core.state import MoveState, WorldState
+from themover.core.hits import DrumHitDetector, Hit
+from themover.core.state import MoveState, Vec3, WorldState
 from themover.devices.camera import CameraSource, CameraThread, open_camera
 from themover.devices.psmove import (
     DiscoveredMove,
@@ -37,6 +38,9 @@ class DeviceManager:
         self.controllers: list[MoveController] = []
         self.filters: list[OrientationFilter] = [OrientationFilter() for _ in range(NUM_CONTROLLERS)]
         self.gestures: list[GestureDetector] = [GestureDetector() for _ in range(NUM_CONTROLLERS)]
+        self.hits: list[DrumHitDetector] = [DrumHitDetector() for _ in range(NUM_CONTROLLERS)]
+        self.on_hit: Optional[Callable[[int, Hit], None]] = None  # fired from the reader thread
+        self.low_latency = False  # True while a rhythm profile is active
         self.tracker = SphereTracker(
             [ColorTarget(tuple(c)) for c in settings.controller_colors[:NUM_CONTROLLERS]],
             mirror=settings.camera_mirror,
@@ -143,8 +147,40 @@ class DeviceManager:
         self.controllers[index] = ctrl
         self.filters[index] = OrientationFilter()
         self.gestures[index] = GestureDetector(config=self.gestures[index].config)
+        self.hits[index] = DrumHitDetector(config=self.hits[index].config)
+        self._wire_hits(index)
+        if self.low_latency:
+            ctrl.start_reader()
         log.info("controller %s <- %s", index + 1, d.label)
         return True
+
+    def _wire_hits(self, index: int) -> None:
+        """Feed every IMU frame of a real controller straight into its hit detector."""
+        ctrl = self.controllers[index]
+        det = self.hits[index]
+
+        def on_frame(accel: Vec3, gyro: Vec3, t: float, trigger: float, move: bool) -> None:
+            hit = det.update(accel, t, trigger, move)
+            if hit is not None:
+                st = ctrl.state
+                st.last_hit = f"{hit.kind} {hit.strength:.1f}g"
+                st.hit_count = det.hit_count
+                if self.on_hit is not None:
+                    self.on_hit(index, hit)
+
+        if isinstance(ctrl, HidMoveController):
+            ctrl.on_frame = on_frame
+
+    def set_low_latency(self, on: bool) -> None:
+        """Rhythm mode: dedicated reader threads so hits are handled the moment a report arrives."""
+        with self._lock:
+            self.low_latency = on
+            for ctrl in self.controllers:
+                if isinstance(ctrl, HidMoveController):
+                    if on:
+                        ctrl.start_reader()
+                    else:
+                        ctrl.stop_reader()
 
     def _announce_controllers(self) -> None:
         parts = []
@@ -168,6 +204,9 @@ class DeviceManager:
                 ctrl.apply_outputs_now()
             self.filters.reverse()
             self.gestures.reverse()
+            self.hits.reverse()
+            for i in range(2):
+                self._wire_hits(i)
             serials = list(self.settings.controller_serials or ["", ""])
             while len(serials) < 2:
                 serials.append("")
@@ -257,6 +296,16 @@ class DeviceManager:
                 st = ctrl.state
                 st.roll, st.pitch, st.yaw = self.filters[i].update(st.accel, st.gyro, dt)
                 self.gestures[i].update(st.accel, st.gyro, dt, now)
+                if not isinstance(ctrl, HidMoveController):
+                    # Simulated controllers have no reader thread: detect hits here.
+                    hit = self.hits[i].update(st.accel, now, st.trigger, st.buttons.get("move", False))
+                    if hit is not None:
+                        st.last_hit = f"{hit.kind} {hit.strength:.1f}g"
+                        st.hit_count = self.hits[i].hit_count
+                        if self.on_hit is not None:
+                            self.on_hit(i, hit)
+                else:
+                    st.report_rate = ctrl.report_rate
                 ctrl.flush_outputs()
             self._update_wheel()
             world = WorldState(controllers=[copy.deepcopy(c.state) for c in self.controllers], t=now, dt=dt)
@@ -283,6 +332,13 @@ class DeviceManager:
         if index >= len(self.gestures):
             return 0.0
         return self.gestures[index].value(name)
+
+    def hit_value(self, index: int, name: str) -> float:
+        if index >= len(self.hits):
+            return 0.0
+        if name == "strength":
+            return self.hits[index].strength
+        return self.hits[index].value(name)
 
     def gesture_strength(self, index: int) -> float:
         if index >= len(self.gestures):

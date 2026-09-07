@@ -141,3 +141,36 @@ def test_release_all_on_profile_change():
     assert sink.keys_down == {"space"}
     eng.set_profile(Profile())
     assert sink.keys_down == set()
+
+
+def test_fast_tap_presses_immediately_and_releases_after_tap():
+    import time as _time
+
+    sink = RecordingSink()
+    eng = MappingEngine(sink)
+    eng.set_profile(Profile(bindings=[
+        Binding("c0.hit.don", "key.j", mode="tap", tap_ms=30),
+        Binding("c0.button.move", "key.j"),  # a normal hold on the same key
+    ]))
+    eng.fast_sources = {"c0.hit.don"}
+    w = world()
+    assert [b.target for b in eng.fast_bindings_for("c0.hit.don")] == ["j"] or eng.fast_bindings_for("c0.hit.don")[0].target == "key.j"
+    eng.fast_tap("key.j", 30)
+    assert "j" in sink.keys_down
+    eng.tick(reader(w), 0.01, now=0.0)  # the tick must not release a fast-held key
+    assert "j" in sink.keys_down
+    _time.sleep(0.06)
+    assert "j" not in sink.keys_down and ("key_up", "j") in sink.events
+    # While the hold binding wants the key, a fast release must not lift it.
+    w.controllers[0].buttons["move"] = True
+    eng.tick(reader(w), 0.01, now=0.1)
+    eng.fast_tap("key.j", 10)
+    _time.sleep(0.04)
+    assert "j" in sink.keys_down
+    w.controllers[0].buttons["move"] = False
+    eng.tick(reader(w), 0.01, now=0.2)
+    assert "j" not in sink.keys_down
+    # Bindings on fast sources are skipped by the tick even if the pulse is high.
+    r = SignalReader(w, hit_value=lambda i, n: 1.0)
+    eng.tick(r, 0.01, now=0.3)
+    assert "j" not in sink.keys_down

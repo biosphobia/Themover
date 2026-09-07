@@ -14,6 +14,7 @@ GESTURE = {
     "thrust": "Punch / thrust {hand} forward", "pull": "Pull {hand} back",
     "flick": "Wrist-flick {hand}", "shake": "Shake {hand}", "swing_any": "Any swing of {hand}",
 }
+HIT = {"don": "Drum strike straight down with {hand}", "kat": "Drum strike angled outward with {hand} (or trigger held)", "any": "Any drum strike with {hand}", "strength": "How hard {hand} strikes"}
 ORIENT = {"roll": "Tilt {hand} sideways", "pitch": "Tilt {hand} forward / back", "yaw": "Turn {hand} left / right"}
 TRACK = {
     "x": "Move {hand} left / right (camera)", "y": "Raise / lower {hand} (camera)",
@@ -70,6 +71,8 @@ def describe_source(source: str) -> str:
         return f"Trigger ({hand})"
     if group == "gesture":
         return fmt(GESTURE.get(member, member))
+    if group == "hit":
+        return fmt(HIT.get(member, member))
     if group == "orient":
         return fmt(ORIENT.get(member, member))
     if group == "track":
@@ -100,7 +103,7 @@ def describe_binding(b: Binding) -> tuple[str, str, str]:
     mode = b.effective_mode()
     how = MODE.get(mode, mode)
     unit = "°" if b.source.split(".")[1:2] == ["orient"] or b.source == "wheel.angle" else ""
-    if mode in ("hold", "tap", "toggle", "repeat") and b.source.split(".")[1:2] not in (["button"], ["gesture"]):
+    if mode in ("hold", "tap", "toggle", "repeat") and b.source.split(".")[1:2] not in (["button"], ["gesture"], ["hit"]):
         if b.compare == "<":
             action += f" (past {b.threshold:g}{unit} the other way)"
         elif b.compare == "abs>":

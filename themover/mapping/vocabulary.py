@@ -6,6 +6,7 @@ to Claude, so all three always agree on what exists.
 from __future__ import annotations
 
 from themover.core.gestures import GESTURE_NAMES
+from themover.core.hits import HIT_KINDS
 from themover.core.state import BUTTON_NAMES
 
 NUM_CONTROLLERS = 2
@@ -16,6 +17,7 @@ SOURCE_GROUPS: dict[str, tuple[str, str, list[str]]] = {
     "button": ("Physical buttons (1 while held)", "0..1", list(BUTTON_NAMES)),
     "trigger": ("Analog trigger", "0..1", []),
     "gesture": ("Motion gestures, pulse to 1 for ~120ms when detected", "0..1", list(GESTURE_NAMES)),
+    "hit": ("Drum strikes for rhythm games, fired at the sharp stop of a stroke with minimal latency: don = straight down, kat = angled/sideways (trigger held forces kat, Move forces don), any = either; strength = current stroke g", "0..1", list(HIT_KINDS) + ["strength"]),
     "orient": ("Orientation in degrees (roll about handle, pitch above horizon, relative yaw)", "-180..180", ["roll", "pitch", "yaw"]),
     "accel": ("Acceleration in g including gravity", "-4..4", ["x", "y", "z"]),
     "gyro": ("Angular speed in degrees/second", "-2000..2000", ["x", "y", "z"]),
@@ -143,6 +145,7 @@ def vocabulary_text() -> str:
     lines.append("  gamepad.<" + "|".join(GAMEPAD_BUTTONS) + ">  - virtual Xbox 360 buttons")
     lines.append("  gamepad.<" + "|".join(GAMEPAD_AXES) + ">  - virtual Xbox 360 axes (-1..1, triggers 0..1)")
     lines.append("")
+    lines.append("RHYTHM GAMES: use cN.hit.don / cN.hit.kat / cN.hit.any with mode tap (tap_ms 30-40). These bypass the engine tick and press the key the instant a strike stops; do not also map cN.gesture.* for the same hand.")
     lines.append("MODES: hold (press while source above threshold), tap (short press on rising edge), toggle, repeat (auto-repeat taps while held),")
     lines.append("       axis (continuous to gamepad axis), mouse (source drives relative mouse speed), absolute (source drives cursor position). 'auto' picks hold for button targets and axis/mouse for axis targets.")
     return "\n".join(lines)

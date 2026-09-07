@@ -82,7 +82,9 @@ class ControllerCard(QFrame):
         model = {"zcm1": "PS Move", "zcm2": "PS Move (PS4 model)", "simulated": "simulated"}.get(st.model, st.model)
         batt = "charging" if st.charging else f"battery {int(st.battery * 100)}%"
         track = "tracked" if st.tracker.tracked else "not tracked"
-        self.subtitle.setText(f"{model} · {batt} · {track}")
+        hits = f" · hits {st.hit_count} ({st.last_hit})" if st.hit_count else ""
+        rate = f" · {st.report_rate:.0f} Hz" if st.report_rate else ""
+        self.subtitle.setText(f"{model} · {batt} · {track}{hits}{rate}")
         r, g, b = st.led
         self.swatch.setStyleSheet(f"border-radius:13px; background: rgb({r},{g},{b});")
         vals = {

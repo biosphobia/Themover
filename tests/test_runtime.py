@@ -109,10 +109,12 @@ def test_taiko_profile_strike_taps_key_once():
         for _ in range(60):
             rt.step(0.01)
         assert rt.devices.gestures[0].config.cooldown_s == 0.11
+        sim.simulate_motion(Vec3(0, 0, -1.0), Vec3())
+        rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, -2.0), Vec3())
-        rt.step(0.01)
+        rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, 4.0), Vec3())
-        rt.step(0.01)
+        rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
         for _ in range(10):
             time.sleep(0.01)
@@ -120,5 +122,35 @@ def test_taiko_profile_strike_taps_key_once():
         presses = [e for e in sink.events if e == ("key_down", "j")]
         assert len(presses) == 1
         assert ("key_up", "j") in sink.events
+    finally:
+        rt.stop()
+
+
+def test_rhythm_profile_enables_fast_path_and_logs_hits():
+    from themover.core.state import Vec3
+
+    rt, sink = make_runtime(load_template("osu_taiko"))
+    rt.start_devices()
+    try:
+        assert rt.devices.low_latency is True
+        assert "c0.hit.don" in rt.engine.fast_sources and "c1.hit.kat" in rt.engine.fast_sources
+        rt.arm()
+        sim = rt.devices.controllers[1]  # left hand
+        sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
+        for _ in range(60):
+            rt.step(0.006)
+        sim.simulate_motion(Vec3(0, 0, -0.8), Vec3()); rt.step(0.006)
+        sim.simulate_motion(Vec3(0, 0, -1.2), Vec3()); rt.step(0.006)
+        sim.simulate_motion(Vec3(0, 0, 4.5), Vec3()); rt.step(0.006)  # the stop
+        assert "f" in sink.keys_down  # pressed on this very step, no extra tick needed
+        sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
+        for _ in range(10):
+            time.sleep(0.01)
+            rt.step(0.006)
+        assert [e for e in sink.events if e[0] == "key_down"] == [("key_down", "f")]
+        assert rt.hit_log and rt.hit_log[-1][1] == 1 and rt.hit_log[-1][2] == "don"
+        assert rt.signal_snapshot().get("c1.hits") == 1.0
+        rt.set_profile(load_template("driving_wheel"))
+        assert rt.devices.low_latency is False and rt.engine.fast_sources == set()
     finally:
         rt.stop()
