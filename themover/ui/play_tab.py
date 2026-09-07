@@ -23,10 +23,6 @@ class PlayTab(QWidget):
         self.profile_combo = QComboBox()
         self.profile_combo.setMinimumWidth(260)
         pick.addWidget(self.profile_combo, 1)
-        self.refresh_btn = QPushButton("↻")
-        self.refresh_btn.setFixedWidth(36)
-        self.refresh_btn.setToolTip("Reload profile list")
-        pick.addWidget(self.refresh_btn)
         left.addLayout(pick)
 
         self.play_btn = QPushButton("▶  PLAY")
@@ -34,7 +30,7 @@ class PlayTab(QWidget):
         self.play_btn.setCheckable(True)
         self.play_btn.setMinimumHeight(56)
         left.addWidget(self.play_btn)
-        self.hint = WrapLabel("Start your game, press PLAY, then alt-tab into the game. Hold the PS button on controller 1 for a second to pause / resume from the couch.")
+        self.hint = WrapLabel("Press PLAY, switch to your game. Hold the PS button for a second to pause / resume.")
         left.addWidget(self.hint)
 
         self.style_box = QTextEdit()
@@ -76,7 +72,6 @@ class PlayTab(QWidget):
 
         self.reload_profiles()
         self.profile_combo.currentIndexChanged.connect(self._on_pick)
-        self.refresh_btn.clicked.connect(self.reload_profiles)
         self.play_btn.toggled.connect(self._on_play)
         ctx.profile_changed.connect(self._on_profile_changed)
         ctx.armed_changed.connect(self._on_armed)
@@ -89,6 +84,9 @@ class PlayTab(QWidget):
             c.set_advanced(on)
         self.active.setVisible(on)
         self.output_status.setVisible(on)
+        self.cam_status.setVisible(on)
+        self.checklist.show_all = on
+        self.checklist.update_items(build_items(self.ctx))
 
     # ---------------------------------------------------------------- slots
     def reload_profiles(self) -> None:
@@ -124,6 +122,8 @@ class PlayTab(QWidget):
     def _on_profile_changed(self, profile, reason: str) -> None:
         text = profile.play_style or profile.description
         self.style_box.setPlainText(f"{profile.name}\n\n{text}")
+        if reason in ("saved", "analysis") or self.ctx.profile_key not in getattr(self, "_keys", []):
+            self.reload_profiles()
         if self.ctx.profile_key in getattr(self, "_keys", []):
             self.profile_combo.blockSignals(True)
             self.profile_combo.setCurrentIndex(self._keys.index(self.ctx.profile_key))

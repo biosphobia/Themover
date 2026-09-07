@@ -90,12 +90,16 @@ class Checklist(QFrame):
         super().__init__()
         self.setObjectName("card")
         self._layout = QVBoxLayout(self)
-        title = QLabel("Ready to play?")
-        title.setObjectName("h2")
-        self._layout.addWidget(title)
+        self.title = QLabel("Ready to play?")
+        self.title.setObjectName("h2")
+        self._layout.addWidget(self.title)
         self._labels: list[QLabel] = []
+        self.show_all = False
 
     def update_items(self, items: list[Item]) -> None:
+        if not self.show_all:
+            problems = [i for i in items if i.level != OK]
+            items = problems or [Item(OK, "All set - press PLAY.")]
         while len(self._labels) < len(items):
             lbl = WrapLabel("", muted=False)
             self._layout.addWidget(lbl)

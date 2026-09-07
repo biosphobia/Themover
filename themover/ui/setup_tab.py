@@ -50,19 +50,18 @@ class SetupTab(QWidget):
 
         # ================================================== controllers
         card, cl = _card("Controllers")
-        info = WrapLabel("Pair each PS Move once with PSMoveServiceEx, then close PSMoveService. Press the PS button on a controller and "
-                         "The Mover picks it up within a few seconds. Slot 1 = right hand, slot 2 = left hand.")
+        info = WrapLabel("Pair once with PSMoveServiceEx (then close it). Press PS on a controller to connect. 1 = right hand, 2 = left hand.")
         cl.addWidget(info)
         self.ctrl_status = WrapLabel("…", muted=False); cl.addWidget(self.ctrl_status)
         row = QHBoxLayout()
-        self.identify_btns = [QPushButton("Identify 1 (buzz + flash)"), QPushButton("Identify 2 (buzz + flash)")]
+        self.identify_btns = [QPushButton("Buzz 1"), QPushButton("Buzz 2")]
         self.swap_btn = QPushButton("Swap 1 ↔ 2")
         for b in self.identify_btns:
             row.addWidget(b)
         row.addWidget(self.swap_btn)
         row.addStretch(1)
         cl.addLayout(row)
-        self.detected = WrapLabel(""); cl.addWidget(self.detected)
+        self.detected = WrapLabel(""); cl.addWidget(self.detected); self._advanced_widgets.append(self.detected)
         adv = QWidget(); al = QGridLayout(adv); al.setContentsMargins(0, 6, 0, 0)
         self.rescan_btn = QPushButton("Rescan now")
         self.forget_btn = QPushButton("Forget slot assignment")
@@ -85,7 +84,7 @@ class SetupTab(QWidget):
         self.test_btn = QPushButton("Save && test")
         krow.addWidget(self.api_key, 1); krow.addWidget(self.show_key); krow.addWidget(self.test_btn)
         kl.addLayout(krow)
-        self.test_status = WrapLabel("The key is only stored on this PC.")
+        self.test_status = WrapLabel("Needed only for the AI Coach. Stored on this PC.")
         kl.addWidget(self.test_status)
         adv = QWidget(); af = QFormLayout(adv); af.setContentsMargins(0, 6, 0, 0)
         self.model = QComboBox(); self.model.setEditable(True); self.model.addItems(AVAILABLE_MODELS); self.model.setCurrentText(s.model)
@@ -105,6 +104,7 @@ class SetupTab(QWidget):
 
         # ================================================== game output
         card, ol = _card("Game output")
+        self._advanced_widgets.append(card)
         self.output_info = WrapLabel("Keyboard and mouse work out of the box. Gamepad profiles need the free ViGEmBus driver (github.com/nefarius/ViGEmBus).")
         ol.addWidget(self.output_info)
         adv = QWidget(); of = QFormLayout(adv); of.setContentsMargins(0, 6, 0, 0)
@@ -123,14 +123,15 @@ class SetupTab(QWidget):
         # ======================================================= camera
         card, ccl = _card("Camera (PS3 Eye or any webcam)")
         self.camera = CameraView(); ccl.addWidget(self.camera, 1)
-        hint = WrapLabel("Only needed for pointing / wheel / boxing profiles. Click a glowing sphere in the picture to teach the tracker its colour.")
+        hint = WrapLabel("Only some profiles use the camera. If a sphere is not tracked, click it in the picture.")
         ccl.addWidget(hint)
         crow = QHBoxLayout()
-        crow.addWidget(QLabel("A click sets the colour of"))
+        crow.addWidget(QLabel("Clicking sets the colour of"))
         self.sample_target = QComboBox(); self.sample_target.addItems(["controller 1", "controller 2"]); crow.addWidget(self.sample_target)
         self.color_btns = []
         for i in range(2):
             cb = QPushButton(f"pick colour {i + 1}"); cb.setMinimumHeight(30); self.color_btns.append(cb); crow.addWidget(cb)
+            self._advanced_widgets.append(cb)
         crow.addStretch(1)
         ccl.addLayout(crow)
         adv = QWidget(); cf = QFormLayout(adv); cf.setContentsMargins(0, 6, 0, 0)

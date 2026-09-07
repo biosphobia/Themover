@@ -175,10 +175,12 @@ class MappingTab(QWidget):
 
         tools = QHBoxLayout()
         self.template_combo = QComboBox()
+        self.template_combo.addItem("Start from a template…", "")
         for key in TEMPLATES:
             self.template_combo.addItem(TEMPLATES[key]["name"], key)
         self.load_template_btn = QPushButton("Load template")
-        self.add_btn = QPushButton("+ Binding")
+        self.load_template_btn.setVisible(False)
+        self.add_btn = QPushButton("+ Add")
         self.edit_btn = QPushButton("Edit")
         self.dup_btn = QPushButton("Duplicate")
         self.del_btn = QPushButton("Remove")
@@ -203,21 +205,25 @@ class MappingTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         root.addWidget(self.table, 3)
 
+        self.fb_widget = QWidget()
+        fbl = QVBoxLayout(self.fb_widget); fbl.setContentsMargins(0, 0, 0, 0)
         fb_head = QHBoxLayout()
         fb_title = QLabel("Rumble & LED feedback")
         fb_title.setObjectName("h2")
         self.fb_add = QPushButton("+ Rule"); self.fb_edit = QPushButton("Edit"); self.fb_del = QPushButton("Remove")
         fb_head.addWidget(fb_title); fb_head.addStretch(1); fb_head.addWidget(self.fb_add); fb_head.addWidget(self.fb_edit); fb_head.addWidget(self.fb_del)
-        root.addLayout(fb_head)
+        fbl.addLayout(fb_head)
         self.fb_table = QTableWidget(0, 5)
         self.fb_table.setHorizontalHeaderLabels(["In plain words", "Controller", "Trigger", "Effect", "Comment"])
         self.fb_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.fb_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.fb_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.fb_table.verticalHeader().setVisible(False)
-        root.addWidget(self.fb_table, 1)
+        fbl.addWidget(self.fb_table, 1)
+        root.addWidget(self.fb_widget, 1)
 
         self.load_template_btn.clicked.connect(self._load_template)
+        self.template_combo.activated.connect(self._template_picked)
         self.add_btn.clicked.connect(self._add)
         self.edit_btn.clicked.connect(self._edit)
         self.table.doubleClicked.connect(self._edit)
@@ -230,7 +236,7 @@ class MappingTab(QWidget):
         self.fb_edit.clicked.connect(self._fb_edit)
         self.fb_table.doubleClicked.connect(self._fb_edit)
         self.fb_del.clicked.connect(self._fb_delete)
-        self.coach_hint = QLabel("Tip: the easiest way to change a mapping is to tell the AI Coach what you want (“make jump a flick up”). Turn on Advanced (top right) to edit every number.")
+        self.coach_hint = QLabel("Easiest way to change things: tell the AI Coach (“make jump a flick up”).")
         self.coach_hint.setObjectName("muted"); self.coach_hint.setWordWrap(True)
         root.addWidget(self.coach_hint)
         ctx.advanced_changed.connect(self.set_advanced)
@@ -247,6 +253,7 @@ class MappingTab(QWidget):
             self.table.setColumnHidden(col, not on)
         for col in (1, 2, 3):
             self.fb_table.setColumnHidden(col, not on)
+        self.fb_widget.setVisible(on)
         for w in (self.sens, self.cooldown, self.import_btn, self.export_btn, self.dup_btn, self.game_edit):
             w.setVisible(on)
         self.sens_label.setVisible(on)
@@ -303,8 +310,15 @@ class MappingTab(QWidget):
         p.gesture_cooldown_ms = self.cooldown.value()
         self._commit(p)
 
+    def _template_picked(self, index: int) -> None:
+        if self.template_combo.itemData(index):
+            self._load_template()
+            self.template_combo.setCurrentIndex(0)
+
     def _load_template(self) -> None:
         key = self.template_combo.currentData()
+        if not key:
+            return
         self.ctx.profile_key = key
         self._commit(load_template(key))
 

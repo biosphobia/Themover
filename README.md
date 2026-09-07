@@ -69,6 +69,29 @@ can explore the mapping editor and the AI Coach.
    controller signals, add/modify/remove bindings, change feedback rules, colours and sensitivity,
    buzz a controller or save the profile.
 
+How the coach thinks: it first works out what the game is and what every input does (held keys =
+movement, taps = actions, continuous mouse = aim), then commits to one physical metaphor themed to
+that game (a steering wheel for racing, holding the right controller like a gun with a flick to
+reload for shooters, sword and shield for melee, drumsticks for rhythm games) and keeps it playable:
+essentials on tilt, triggers and buttons, gestures for the satisfying occasional actions. It uses
+only the features that add fun, and the camera only where it clearly helps (light-gun pointing,
+two-hand wheel, boxing lean). Its structured analysis (game, genre, inputs, metaphor, why the
+camera was or was not used, playability concerns) is shown after each build.
+
+### Coach logs
+
+Every analysis and chat turn is written to `%APPDATA%\TheMover\coach_logs\`:
+
+- `coach_log.jsonl`: one JSON line per event with the recording summary, the structured analysis,
+  the resulting profile, tool calls made during chat, Claude's summarised reasoning, model, token
+  usage and timing.
+- `analysis-<timestamp>.md`: a readable report per build (what the coach saw, its analysis and
+  reasoning summary, the play style, the bindings).
+- Recordings themselves (screenshots + input events) stay in `recordings\<timestamp>\`.
+
+Past chat feedback about the same game is fed back into the next analysis of that game, so
+"aim is too fast" said once is remembered next time you rebuild the controls.
+
 Default model: `claude-opus-5` (changeable under Advanced in Setup). Requests use adaptive thinking, prompt
 caching for the stable system prompt, and the server-side refusal fallback, so a declined request
 is automatically retried on a fallback model.
@@ -165,10 +188,10 @@ themover/
   devices/    PS Move HID protocol, controller discovery + stable slots, PS3 Eye / OpenCV / synthetic camera, sphere tracker
   mapping/    vocabulary, profile schema, built-in templates, engine, runtime loop
   outputs/    Windows SendInput (scan-codes), pynput fallback, ViGEm virtual gamepad
-  ai/         recorder (screen + input), Claude client, analyzer (structured output), chat coach (tool use)
+  ai/         recorder (screen + input), Claude client, analyzer (structured analysis + profile), chat coach (tool use), coach log
   ui/         PySide6 app: Play (checklist), Mapping (plain-English / advanced), AI Coach, Setup; Advanced switch
   profiles/   user profile library
-tests/        76 unit tests (protocol + LED writer, discovery/slots, tracker, motion, engine, runtime, humanizer, AI with a fake client, GUI smoke)
+tests/        78 unit tests (protocol + LED writer, discovery/slots, tracker, motion, engine, runtime, humanizer, AI + coach log with a fake client, GUI smoke)
 ```
 
 ## 7. Notes and known limits

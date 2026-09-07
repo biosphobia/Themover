@@ -70,10 +70,10 @@ class ControllerCard(QFrame):
 
     def set_advanced(self, on: bool) -> None:
         for name in self.gauges:
-            visible = on or name in self.simple_rows
-            self.gauges[name].setVisible(visible)
-            self.labels[name].setVisible(visible)
+            self.gauges[name].setVisible(on)
+            self.labels[name].setVisible(on)
         self.output.setVisible(on)
+        self.buttons.setVisible(on)
 
     def update_state(self, st: Optional[MoveState]) -> None:
         if st is None:

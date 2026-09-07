@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
             self.ctx.load_profile_key("generic_gamepad")
         self.ctx.runtime.start()
         if not settings.effective_api_key:
-            self._set_status("Welcome! Pick a profile and press PLAY. Add your Anthropic API key in Setup to unlock the AI Coach.")
+            self._set_status("Pick a profile and press PLAY. Add a Claude API key in Setup for the AI Coach.")
 
         self._ps_down_since = 0.0
         self._ps_toggled = False
