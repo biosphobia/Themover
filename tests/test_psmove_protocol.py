@@ -2,36 +2,55 @@ from themover.devices import psmove as P
 from themover.core.state import Vec3
 
 
-def make_report(buttons1=0, buttons2=0, buttons3=0, buttons4=0, trigger=0, battery=5, accel=(0, 0, 0), gyro=(0, 0, 0), mag=(0, 0, 0), model="zcm1"):
+def make_report(buttons1=0, buttons2=0, buttons3=0, buttons4=0, trigger=0, battery=5, accel=(0, 0, 0), gyro=(0, 0, 0), mag=(0, 0, 0), model="zcm1", accel_frame1=None):
+    """Build a report from the psmoveapi PSMove_Data_Input layout (independent of the parser)."""
     rep = bytearray(49)
-    rep[0] = P.REQ_GET_INPUT
+    rep[0] = 0x01
     rep[1], rep[2], rep[3], rep[4] = buttons1, buttons2, buttons3, buttons4
     rep[5] = rep[6] = trigger
-    rep[13] = battery
+    # 7..10 unknown, 11 timehigh
+    rep[12] = battery
 
     def put16(off, v):
         if model == "zcm1":
             v = v + 0x8000
-            rep[off] = v & 0xFF
-            rep[off + 1] = (v >> 8) & 0xFF
-        else:
-            v &= 0xFFFF
-            rep[off] = v & 0xFF
-            rep[off + 1] = (v >> 8) & 0xFF
+        v &= 0xFFFF
+        rep[off] = v & 0xFF
+        rep[off + 1] = (v >> 8) & 0xFF
 
+    f1 = accel_frame1 or accel
+    for i, v in enumerate(f1):
+        put16(13 + 2 * i, v)  # accel frame 1
     for i, v in enumerate(accel):
-        put16(14 + 2 * i, v)
-        put16(20 + 2 * i, v)
+        put16(19 + 2 * i, v)  # accel frame 2
     for i, v in enumerate(gyro):
-        put16(26 + 2 * i, v)
-        put16(32 + 2 * i, v)
+        put16(25 + 2 * i, v)  # gyro frame 1
+        put16(31 + 2 * i, v)  # gyro frame 2
     mx, my, mz = [m & 0xFFF for m in mag]
-    rep[39] = (rep[39] & 0xF0) | ((mx >> 8) & 0x0F)
-    rep[40] = mx & 0xFF
-    rep[41] = (my >> 4) & 0xFF
-    rep[42] = ((my & 0x0F) << 4) | ((mz >> 8) & 0x0F)
-    rep[43] = mz & 0xFF
+    rep[37] = 0  # temphigh
+    rep[38] = (rep[38] & 0xF0) | ((mx >> 8) & 0x0F)  # templow / mXhigh
+    rep[39] = mx & 0xFF
+    rep[40] = (my >> 4) & 0xFF
+    rep[41] = ((my & 0x0F) << 4) | ((mz >> 8) & 0x0F)
+    rep[42] = mz & 0xFF
+    rep[43] = 0  # timelow
     return bytes(rep)
+
+
+def test_layout_matches_reference_offsets():
+    """Guard against off-by-one: fields sit exactly where psmoveapi puts them."""
+    from themover.devices import psmove as P
+
+    assert (P.OFF_BATTERY, P.OFF_ACCEL, P.OFF_GYRO, P.OFF_TEMP, P.OFF_TIMELOW) == (12, 13, 25, 37, 43)
+    rep = bytearray(49)
+    rep[0] = 0x01
+    rep[12] = 0xEE  # battery byte
+    for off in (13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35):
+        rep[off:off + 2] = (0x8000).to_bytes(2, "little")  # zero in ZCM1 encoding
+    rep[19:21] = (4300 + 0x8000).to_bytes(2, "little")  # accel X, frame 2
+    rep[31:33] = (0x8000 - 500).to_bytes(2, "little")  # gyro X, frame 2
+    smp = P.parse_input_report(bytes(rep))
+    assert smp.battery_raw == 0xEE and smp.accel == (4300, 0, 0) and smp.gyro == (-500, 0, 0)
 
 
 def test_button_decoding():
@@ -146,7 +165,7 @@ def test_led_writer_rate_limits_and_keeps_alive(monkeypatch):
     c._last_write -= P.LED_KEEPALIVE_SECONDS
     c.flush_outputs()
     assert len(dev.writes) == 3
-    assert c.state.output_status.startswith("LED/rumble ok")
+    assert c.state.output_status.startswith("LED/rumble sent") and c.write_results["hid_write"] == [3, 0]
 
 
 def test_short_rumble_pulse_is_latched(monkeypatch):
@@ -176,12 +195,8 @@ def test_failed_writes_are_reported_and_retried(monkeypatch):
 
 
 def test_both_imu_frames_are_parsed_oldest_first():
-    rep = bytearray(make_report(accel=(10, 20, 30), gyro=(1, 2, 3)))
-    # frame 0 lives at 14..19 / 26..31; give it different values
-    for i, v in enumerate((100, 200, 300)):
-        rep[14 + 2 * i] = (v + 0x8000) & 0xFF
-        rep[15 + 2 * i] = ((v + 0x8000) >> 8) & 0xFF
-    frames = P.parse_input_frames(bytes(rep))
+    rep = make_report(accel=(10, 20, 30), gyro=(1, 2, 3), accel_frame1=(100, 200, 300))
+    frames = P.parse_input_frames(rep)
     assert [f.accel for f in frames] == [(100, 200, 300), (10, 20, 30)]
     assert frames[1].gyro == (1, 2, 3)
     assert P.parse_input_frames(b"\x07" + bytes(48)) == []
@@ -220,3 +235,29 @@ def test_reader_thread_delivers_frames(monkeypatch):
     assert len(got) == 2 and got[0][1] < got[1][1] and abs((got[1][1] - got[0][1]) - 0.0057) < 1e-6
     assert got[1][2] == 1.0 and got[1][3] is True
     assert abs(got[1][0].y - 1.0) < 0.05 and c.state.trigger == 1.0 and c.reports == 1
+
+
+def test_gyro_scale_is_learned_from_gravity():
+    import math
+
+    true_scale = 0.0015  # rad/s per raw unit
+    cal = P.AutoCalibration(accel_units_per_g=4300.0, gyro_rad_per_unit=0.0009)  # start 40% off
+    dt = 1 / 85
+    rate = math.radians(60)  # slow tumble at 60 deg/s about the sensor x axis
+    raw_rate = rate / true_scale
+    ang = 0.0
+    for _ in range(600):
+        ang += rate * dt
+        accel = (0, int(4300 * math.cos(ang)), int(4300 * math.sin(ang)))
+        cal.feed(accel, (int(raw_rate), 0, 0), dt)
+    assert cal.scale_updates >= 1
+    assert abs(cal.gyro_rad_per_unit - true_scale) / true_scale < 0.15
+    assert max(abs(b) for b in cal.gyro_bias) < 50  # a steady rotation must not be mistaken for rest
+
+
+def test_hid_diagnostics_mentions_status(monkeypatch):
+    dev = _Dev()
+    c = _controller(monkeypatch, dev)
+    c.apply_outputs_now()
+    text = P.hid_diagnostics([c])
+    assert "slot 1" in text and "LED/rumble sent" in text and "cal:" in text

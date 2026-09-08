@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from themover.ai.client import ClaudeClient
 from themover.config import AVAILABLE_MODELS, save_settings, settings_path
-from themover.devices.psmove import HidMoveController
+from themover.devices.psmove import HidMoveController, hid_diagnostics
 from themover.ui.camera_view import CameraView
 from themover.ui.context import AppContext
 from themover.links import controller_install_html
@@ -77,10 +77,14 @@ class SetupTab(QWidget):
         self.led_method = QComboBox(); self.led_method.addItems(["auto", "write", "control"]); self.led_method.setCurrentText(s.led_method)
         self.led_method.setToolTip("How LED/rumble reports are sent. auto = hid_write, falling back to the Windows control pipe if writes fail.")
         self.recenter_btn = QPushButton("Re-centre yaw (point both at the screen, then click)")
+        self.diag_btn = QPushButton("Copy HID diagnostics (for bug reports)")
+        self.motion_lbl = WrapLabel("")
         al.addWidget(self.rescan_btn, 0, 0); al.addWidget(self.forget_btn, 0, 1)
         al.addWidget(QLabel("Controller backend"), 1, 0); al.addWidget(self.backend, 1, 1)
         al.addWidget(QLabel("LED / rumble method"), 2, 0); al.addWidget(self.led_method, 2, 1)
         al.addWidget(self.recenter_btn, 3, 0, 1, 2)
+        al.addWidget(self.diag_btn, 4, 0, 1, 2)
+        al.addWidget(self.motion_lbl, 5, 0, 1, 2)
         cl.addWidget(adv); self._advanced_widgets.append(adv)
         left.addWidget(card)
 
@@ -193,6 +197,7 @@ class SetupTab(QWidget):
         self.backend.currentTextChanged.connect(self._backend_changed)
         self.led_method.currentTextChanged.connect(self._led_method_changed)
         self.recenter_btn.clicked.connect(lambda: self.ctx.runtime.devices.reset_yaw())
+        self.diag_btn.clicked.connect(self._diagnostics)
         self.show_key.toggled.connect(lambda on: self.api_key.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
         self.test_btn.clicked.connect(self._test)
         self.api_key.editingFinished.connect(self.save)
@@ -325,6 +330,16 @@ class SetupTab(QWidget):
         self.test_status.setText("Saved, but the test failed: " + err.split("\n")[0])
 
     # ------------------------------------------------------- controllers
+    def _diagnostics(self) -> None:
+        import logging
+
+        text = hid_diagnostics(self.ctx.runtime.devices.controllers)
+        logging.getLogger("themover.diagnostics").info("HID diagnostics:\n%s", text)
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(text)
+        QMessageBox.information(self, "HID diagnostics (copied to clipboard)", text)
+
     def _swap(self) -> None:
         self.ctx.runtime.devices.swap_controllers()
         save_settings(self.ctx.settings)
@@ -411,6 +426,17 @@ class SetupTab(QWidget):
             batt = "charging" if st.charging else f"battery {int(st.battery * 100)}%"
             lines.append(f"Controller {i + 1}: PS Move {st.serial} · {batt} · {st.output_status or 'LED/rumble: waiting'}")
         self.ctrl_status.setText("\n".join(lines) or "no controllers")
+        import math
+
+        motion = []
+        for i, c in enumerate(dev.controllers):
+            st = c.state
+            motion.append(
+                f"{i + 1}: accel ({st.accel.x:+.2f}, {st.accel.y:+.2f}, {st.accel.z:+.2f}) g · "
+                f"gyro ({math.degrees(st.gyro.x):+.0f}, {math.degrees(st.gyro.y):+.0f}, {math.degrees(st.gyro.z):+.0f}) °/s · "
+                f"roll {st.roll:+.0f}° pitch {st.pitch:+.0f}° yaw {st.yaw:+.0f}°"
+            )
+        self.motion_lbl.setText("\n".join(motion))
         none_found = dev.real_controller_count() == 0 and self.ctx.settings.controller_backend != "simulated"
         if none_found and not self.install_help.isVisible():
             self.install_help.setText(controller_install_html())

@@ -23,6 +23,7 @@ def test_enumerate_dedupes_interfaces_and_sorts_bluetooth_first():
     found = P.enumerate_controllers(entries)
     assert [d.key for d in found] == ["00:1b:44:11:3a:b7", "00:1b:44:11:3a:c2", "usb-1"]
     assert found[0].path == b"bt-a-if1" and found[0].interface == "bluetooth"
+    assert set(found[0].paths) == {b"bt-a-if0", b"bt-a-if1"}  # every collection is remembered for output fallbacks
     assert found[1].model == "zcm2" and found[2].interface == "usb"
     assert "PS Move (PS4 model)" in found[1].label
 

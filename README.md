@@ -217,9 +217,22 @@ the motor. Each controller's write health is shown in Setup ("LED/rumble ok [hid
 says *NOT working*:
 
 1. Make sure PSMoveService is closed (it overrides colours and rumble).
-2. Switch *LED / rumble method* (Advanced) to `control`, which sends reports through the Windows
-   HID control pipe instead of the interrupt pipe. `auto` does this by itself when a write fails.
-3. Check `%APPDATA%\TheMover\themover.log` for the exact error.
+2. In `auto` mode The Mover already sends every report through `hid_write` **and** the Windows
+   control pipe (`HidD_SetOutputReport`), on every HID collection the controller exposes, because
+   Bluetooth stacks disagree about which one carries output reports. The status shows per-method
+   success counts, e.g. `hid_write 12/12, control 12/12`.
+3. Advanced → **Copy HID diagnostics** puts the HID collections, paths, write results, report rate,
+   live accelerometer / gyro readings and calibration state on the clipboard; paste that into a bug
+   report. It is also written to `%APPDATA%\TheMover\themover.log`.
+
+### Motion values
+
+Accelerometer, gyro, roll/pitch/yaw are decoded from the report exactly as psmoveapi does (battery
+at byte 12, accelerometer frames at 13 and 19, gyro frames at 25 and 31, magnetometer from 38). The
+accelerometer scale and the gyro bias are learned while the controller rests; the gyro *scale* is
+refined while you turn the controller slowly (the gravity direction must rotate exactly as fast as
+the gyro says), so after a few seconds of handling, values are in real g and degrees per second.
+Advanced → Setup shows the live numbers per controller.
 
 ### Updates without rebuilding the .exe
 

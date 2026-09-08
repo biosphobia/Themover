@@ -129,7 +129,7 @@ class DeviceManager:
             return found
 
     def _open_slot(self, index: int, d: DiscoveredMove) -> bool:
-        ctrl = HidMoveController(index, d.path, d.model, d.serial, led_method=self.settings.led_method)
+        ctrl = HidMoveController(index, d.path, d.model, d.serial, led_method=self.settings.led_method, alt_paths=list(d.paths))
         try:
             ctrl.open()
         except Exception as exc:
