@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         self.play_tab = PlayTab(self.ctx)
         self.mapping_tab = MappingTab(self.ctx)
         self.ai_tab = AITab(self.ctx)
-        self.setup_tab = SetupTab(self.ctx, on_api_changed=self.ai_tab.reset_client)
+        self.setup_tab = SetupTab(self.ctx, on_api_changed=self.ai_tab.reset_client, on_restart=self.restart_app)
         self.tabs.addTab(self.play_tab, "▶ Play")
         self.tabs.addTab(self.mapping_tab, "Mapping")
         self.tabs.addTab(self.ai_tab, "✨ AI Coach")
@@ -70,6 +70,23 @@ class MainWindow(QMainWindow):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(50)
+        if settings.check_updates_on_start:
+            QTimer.singleShot(1500, lambda: self.setup_tab.check_updates(silent=True))
+
+    def restart_app(self) -> None:
+        """Release the hardware, launch a fresh process and close this one."""
+        self._timer.stop()
+        try:
+            self.ctx.shutdown()
+        except Exception as exc:
+            log.warning("shutdown before restart: %s", exc)
+        try:
+            self.setup_tab.updater.relaunch()
+        except Exception as exc:
+            log.error("relaunch failed: %s", exc)
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance().quit()
 
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)

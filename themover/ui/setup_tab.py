@@ -15,6 +15,7 @@ from themover.ui.camera_view import CameraView
 from themover.ui.context import AppContext
 from themover.ui.widgets import WrapLabel
 from themover.ui.workers import Worker, run_in_background
+from themover.updater import Updater, current_version, remove_override
 
 
 def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
@@ -28,12 +29,14 @@ def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
 
 
 class SetupTab(QWidget):
-    def __init__(self, ctx: AppContext, on_api_changed=None) -> None:
+    def __init__(self, ctx: AppContext, on_api_changed=None, on_restart=None) -> None:
         super().__init__()
         self.ctx = ctx
         self.on_api_changed = on_api_changed
+        self.on_restart = on_restart
         s = ctx.settings
         self._advanced_widgets: list[QWidget] = []
+        self.updater = Updater(s)
 
         outer = QVBoxLayout(self)
         scroll = QScrollArea()
@@ -118,6 +121,31 @@ class SetupTab(QWidget):
         self.path_lbl = WrapLabel(f"Settings file: {settings_path()}")
         ol.addWidget(self.path_lbl); self._advanced_widgets.append(self.path_lbl)
         left.addWidget(card)
+
+        # ====================================================== updates
+        card, ul = _card("Updates")
+        self.version_lbl = WrapLabel(current_version().describe(), muted=False)
+        ul.addWidget(self.version_lbl)
+        self.update_status = WrapLabel("Updates come straight from GitHub pushes; no new .exe needed unless a dependency changes.")
+        ul.addWidget(self.update_status)
+        urow = QHBoxLayout()
+        self.check_btn = QPushButton("Check for updates")
+        self.update_btn = QPushButton("Update && restart"); self.update_btn.setObjectName("accent2"); self.update_btn.setEnabled(False)
+        urow.addWidget(self.check_btn); urow.addWidget(self.update_btn); urow.addStretch(1)
+        ul.addLayout(urow)
+        adv = QWidget(); uf = QFormLayout(adv); uf.setContentsMargins(0, 6, 0, 0)
+        self.upd_repo = QLineEdit(f"{s.update_owner}/{s.update_repo}")
+        self.upd_branch = QLineEdit(s.update_branch); self.upd_branch.setPlaceholderText(f"(branch of this build: {current_version().branch or 'main'})")
+        self.upd_token = QLineEdit(s.github_token); self.upd_token.setEchoMode(QLineEdit.Password); self.upd_token.setPlaceholderText("only for private repositories")
+        self.upd_on_start = QCheckBox("Check for updates when The Mover starts"); self.upd_on_start.setChecked(s.check_updates_on_start)
+        self.revert_btn = QPushButton("Remove downloaded update (use the built-in copy)")
+        uf.addRow("GitHub repo", self.upd_repo)
+        uf.addRow("Branch", self.upd_branch)
+        uf.addRow("Token", self.upd_token)
+        uf.addRow("", self.upd_on_start)
+        uf.addRow("", self.revert_btn)
+        ul.addWidget(adv); self._advanced_widgets.append(adv)
+        left.addWidget(card)
         left.addStretch(1)
 
         # ======================================================= camera
@@ -176,6 +204,12 @@ class SetupTab(QWidget):
         self.reconnect_btn.clicked.connect(self._reconnect_camera)
         self.near_btn.clicked.connect(lambda: self._set_depth("near"))
         self.far_btn.clicked.connect(lambda: self._set_depth("far"))
+        self.check_btn.clicked.connect(lambda: self.check_updates(silent=False))
+        self.update_btn.clicked.connect(self._install_update)
+        self.revert_btn.clicked.connect(self._revert_update)
+        for w in (self.upd_repo, self.upd_branch, self.upd_token):
+            w.editingFinished.connect(self._save_update_settings)
+        self.upd_on_start.toggled.connect(lambda _v: self._save_update_settings())
         ctx.advanced_changed.connect(self.set_advanced)
         self.set_advanced(ctx.advanced)
         self._update_swatches()
@@ -183,6 +217,68 @@ class SetupTab(QWidget):
     def set_advanced(self, on: bool) -> None:
         for w in self._advanced_widgets:
             w.setVisible(on)
+
+    # ------------------------------------------------------------ updates
+    def _save_update_settings(self) -> None:
+        s = self.ctx.settings
+        owner, _, repo = self.upd_repo.text().strip().partition("/")
+        if owner and repo:
+            s.update_owner, s.update_repo = owner, repo
+        s.update_branch = self.upd_branch.text().strip()
+        s.github_token = self.upd_token.text().strip()
+        s.check_updates_on_start = self.upd_on_start.isChecked()
+        save_settings(s)
+
+    def check_updates(self, silent: bool = True) -> None:
+        """Download the branch archive in the background and compare its commit with ours."""
+        if not silent:
+            self.update_status.setText("Checking GitHub…")
+        self.check_btn.setEnabled(False)
+        updater = self.updater
+
+        def job(signals):
+            return updater.check()
+
+        w = Worker(job)
+        w.signals.finished.connect(self._on_update_status)
+        w.signals.error.connect(self._on_update_error)
+        run_in_background(w)
+
+    def _on_update_status(self, status) -> None:
+        self.check_btn.setEnabled(True)
+        self.update_status.setText(status.text())
+        self.update_btn.setEnabled(bool(status.available) and self.updater.can_install)
+        if status.available and not self.updater.can_install:
+            self.update_status.setText(status.text() + " You run from source: use `git pull`.")
+        if status.available:
+            self.ctx.status.emit("Update available - Setup → Update && restart")
+
+    def _on_update_error(self, err: str) -> None:
+        self.check_btn.setEnabled(True)
+        self.update_status.setText("Update check failed: " + err.split("\n")[0])
+
+    def _install_update(self) -> None:
+        self.update_btn.setEnabled(False)
+        self.update_status.setText("Downloading and installing…")
+        updater = self.updater
+
+        def job(signals):
+            return str(updater.install())
+
+        w = Worker(job)
+        w.signals.finished.connect(self._on_update_installed)
+        w.signals.error.connect(self._on_update_error)
+        run_in_background(w)
+
+    def _on_update_installed(self, path: str) -> None:
+        self.update_status.setText("Installed. Restarting…")
+        if self.on_restart:
+            self.on_restart()
+
+    def _revert_update(self) -> None:
+        remove_override()
+        self.update_status.setText("Downloaded update removed. Restart to use the built-in copy.")
+        self.update_btn.setEnabled(False)
 
     # ---------------------------------------------------------- settings
     def save(self) -> None:

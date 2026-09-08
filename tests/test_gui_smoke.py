@@ -19,7 +19,7 @@ def test_main_window_starts_and_arms(qapp):
     from themover.config import Settings, save_settings
     from themover.ui.main_window import MainWindow
 
-    s = Settings(camera_backend="synthetic", controller_backend="simulated")
+    s = Settings(camera_backend="synthetic", controller_backend="simulated", check_updates_on_start=False)
     save_settings(s)
     w = MainWindow(s)
     try:
@@ -80,7 +80,7 @@ def test_ai_tab_recording_signals_and_chat_host(qapp):
     from themover.ui.ai_tab import AITab, _Host
     from themover.ui.context import AppContext
 
-    ctx = AppContext(Settings(camera_backend="synthetic", controller_backend="simulated"))
+    ctx = AppContext(Settings(camera_backend="synthetic", controller_backend="simulated", check_updates_on_start=False))
     tab = AITab(ctx)
     try:
         tab.rec_progress.emit(5.0, 10.0)

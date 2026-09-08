@@ -70,6 +70,13 @@ class Settings:
     start_minimized: bool = False
     advanced_mode: bool = False
 
+    # Updates (straight from GitHub pushes, no rebuild needed)
+    update_owner: str = "biosphobia"
+    update_repo: str = "Themover"
+    update_branch: str = ""  # "" = the branch this build came from
+    check_updates_on_start: bool = True
+    github_token: str = ""  # only needed for private repositories
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

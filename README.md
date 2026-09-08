@@ -200,6 +200,27 @@ says *NOT working*:
    HID control pipe instead of the interrupt pipe. `auto` does this by itself when a write fails.
 3. Check `%APPDATA%\TheMover\themover.log` for the exact error.
 
+### Updates without rebuilding the .exe
+
+`TheMover.exe` is a launcher: it bundles Python and every dependency plus a copy of the app code,
+and on start it prefers a newer copy of the `themover` package in `%APPDATA%\TheMover\app\` if one
+is there. The **Updates** card in Setup fills that folder straight from GitHub:
+
+- **Check for updates** downloads the branch archive (`codeload.github.com/…/zip/refs/heads/<branch>`,
+  about 200 KB) and reads the commit SHA GitHub stores in the zip comment, so no API token and no
+  rate limit are involved. The app also checks once on start (Advanced → toggle).
+- **Update & restart** unpacks `themover/` into the app folder (atomic swap), writes `version.json`,
+  releases the controllers and relaunches. The next start runs the new code.
+- Before installing, the updater reads the archive's `requirements.txt` and refuses if it needs a
+  package the executable does not contain (that is the one case where a new .exe is required).
+- If downloaded code fails to import, the launcher moves it to `themover.broken` and starts the
+  built-in copy, so a bad push can never brick the app. **Remove downloaded update** (Advanced)
+  goes back to the built-in copy manually.
+- The branch defaults to the one the executable was built from (stamped by CI into `_build.json`);
+  Advanced lets you point it at another branch or repo, and add a token for private repos.
+
+Running from source, the card only reports whether the branch moved; use `git pull` there.
+
 ## 5. Running from source
 
 ```bash
