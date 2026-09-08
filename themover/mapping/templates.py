@@ -38,14 +38,18 @@ TEMPLATES: dict[str, dict] = {
             _b("c1.button.square", "gamepad.dpad_left"), _b("c1.button.circle", "gamepad.dpad_right"),
             _b("c1.button.start", "gamepad.rb"), _b("c0.gesture.thrust", "gamepad.rs", mode="tap"),
         ],
-        "feedback": [_fb(when="c0.trigger", controller=0, rumble=0.4, duration_ms=80, threshold=0.6)],
+        "feedback": [
+            _fb(rumble_from="c0.trigger", controller=0, rumble=0.5, comment="RT pressure you can feel"),
+            _fb(rumble_from="c1.trigger", controller=1, rumble=0.5, comment="LT pressure"),
+            _fb(when="c0.gesture.thrust", controller=0, rumble=0.8, duration_ms=100, led=[255, 255, 255], led_duration_ms=100, comment="click confirm"),
+        ],
     },
     "driving_wheel": {
         "name": "Driving wheel",
         "game": "Racing / driving games",
         "description": "Hold both controllers like a steering wheel. The camera measures the tilt between the two spheres; trigger = accelerate, left trigger = brake.",
         "play_style": "Grip one controller in each hand at 9 and 3 o'clock and turn them together like a wheel. Squeeze the right trigger to accelerate and the left trigger to brake/reverse. Press Move on the right hand for handbrake, flick either controller up to shift up, down to shift down.",
-        "controllers": [{"color": MAGENTA, "role": "right hand"}, {"color": CYAN, "role": "left hand"}],
+        "controllers": [{"color": [255, 120, 0], "role": "right hand (throttle side)"}, {"color": [0, 160, 255], "role": "left hand (brake side)"}],
         "bindings": [
             _b("wheel.angle", "gamepad.left_stick_x", mode="axis", input_range=[-70, 70], deadzone=0.04, curve="linear", smoothing=0.3, comment="steering"),
             _b("c0.trigger", "gamepad.right_trigger", mode="axis", input_range=[0, 1], comment="throttle"),
@@ -61,7 +65,10 @@ TEMPLATES: dict[str, dict] = {
         ],
         "feedback": [
             _fb(rumble_from="c0.trigger", controller=0, rumble=0.35, comment="engine buzz grows with throttle"),
-            _fb(when="c1.trigger", controller=1, rumble=0.6, duration_ms=120, threshold=0.7, comment="brake thump"),
+            _fb(when="c1.trigger", controller=1, rumble=0.6, duration_ms=120, threshold=0.7, led=[255, 0, 0], led_duration_ms=250, comment="brake: thump + brake-light red"),
+            _fb(when="c0.gesture.swing_up", controller=0, rumble=0.9, duration_ms=70, led=[255, 255, 255], led_duration_ms=120, comment="gear up: clunk + flash"),
+            _fb(when="c0.gesture.swing_down", controller=0, rumble=0.9, duration_ms=70, led=[255, 255, 255], led_duration_ms=120, comment="gear down"),
+            _fb(when="c0.button.move", controller=0, rumble=0.5, duration_ms=300, led=[255, 40, 40], led_duration_ms=300, comment="handbrake"),
         ],
     },
     "sword_and_shield": {
@@ -91,8 +98,10 @@ TEMPLATES: dict[str, dict] = {
             _b("c0.button.start", "key.esc"), _b("c0.button.select", "key.tab"),
         ],
         "feedback": [
-            _fb(when="c0.gesture.swing_any", controller=0, rumble=0.9, duration_ms=120, led=[255, 255, 255], led_duration_ms=100, comment="hit feedback"),
-            _fb(when="c1.trigger", controller=1, rumble=0.3, duration_ms=100, threshold=0.4, led=[0, 120, 255], led_duration_ms=300),
+            _fb(when="c0.gesture.swing_any", controller=0, rumble=0.9, duration_ms=120, led=[255, 255, 255], led_duration_ms=100, comment="sword clash"),
+            _fb(when="c0.gesture.thrust", controller=0, rumble=1.0, duration_ms=160, led=[255, 60, 60], led_duration_ms=160, comment="stab lands"),
+            _fb(when="c1.trigger", controller=1, rumble=0.3, duration_ms=100, threshold=0.4, led=[0, 120, 255], led_duration_ms=300, comment="shield up"),
+            _fb(when="c1.gesture.thrust", controller=1, rumble=0.9, duration_ms=120, led=[255, 255, 255], led_duration_ms=120, comment="shield bash"),
         ],
         "gesture_sensitivity": 1.0,
     },
@@ -120,8 +129,11 @@ TEMPLATES: dict[str, dict] = {
             _b("c0.button.start", "key.esc"), _b("c0.button.select", "key.tab"),
         ],
         "feedback": [
-            _fb(when="c0.trigger", controller=0, rumble=0.8, duration_ms=60, threshold=0.35, led=[255, 200, 0], led_duration_ms=60, comment="muzzle kick"),
-            _fb(when="c1.trigger", controller=1, rumble=0.2, duration_ms=100, threshold=0.5),
+            _fb(when="c0.trigger", controller=0, rumble=0.8, duration_ms=60, threshold=0.35, led=[255, 200, 0], led_duration_ms=60, comment="muzzle kick + flash"),
+            _fb(when="c0.gesture.shake", controller=0, rumble=0.6, duration_ms=200, led=[0, 255, 120], led_duration_ms=400, comment="reload: rattle + green"),
+            _fb(when="c0.button.move", controller=0, rumble=0.25, duration_ms=80, comment="aim down sights click"),
+            _fb(when="c1.trigger", controller=1, rumble=0.2, duration_ms=100, threshold=0.5, comment="sprint start"),
+            _fb(when="c1.gesture.swing_up", controller=1, rumble=0.5, duration_ms=90, led=[255, 255, 255], led_duration_ms=90, comment="jump"),
         ],
     },
     "boxing": {
@@ -144,8 +156,10 @@ TEMPLATES: dict[str, dict] = {
             _b("c0.button.start", "gamepad.start"), _b("c0.button.select", "gamepad.back"),
         ],
         "feedback": [
-            _fb(when="c0.gesture.swing_any", controller=0, rumble=1.0, duration_ms=150, led=[255, 255, 255], led_duration_ms=120),
-            _fb(when="c1.gesture.swing_any", controller=1, rumble=1.0, duration_ms=150, led=[255, 255, 255], led_duration_ms=120),
+            _fb(when="c0.gesture.swing_any", controller=0, rumble=1.0, duration_ms=150, led=[255, 255, 255], led_duration_ms=120, comment="punch impact"),
+            _fb(when="c1.gesture.swing_any", controller=1, rumble=1.0, duration_ms=150, led=[255, 255, 255], led_duration_ms=120, comment="punch impact"),
+            _fb(when="both.center_y", controller=0, rumble=0.0, threshold=0.35, led=[0, 120, 255], led_duration_ms=400, comment="guard up: both spheres go blue"),
+            _fb(when="both.center_y", controller=1, rumble=0.0, threshold=0.35, led=[0, 120, 255], led_duration_ms=400),
         ],
         "gesture_sensitivity": 0.9,
     },
@@ -166,7 +180,11 @@ TEMPLATES: dict[str, dict] = {
             _b("c1.orient.pitch", "gamepad.right_stick_y", mode="axis", input_range=[-45, 45], deadzone=0.2),
             _b("c0.button.start", "gamepad.start"), _b("c0.button.select", "gamepad.back"),
         ],
-        "feedback": [_fb(when="c0.gesture.swing_up", controller=0, rumble=0.5, duration_ms=100)],
+        "feedback": [
+            _fb(when="c0.gesture.swing_up", controller=0, rumble=0.5, duration_ms=100, led=[255, 255, 255], led_duration_ms=100, comment="jump"),
+            _fb(when="c0.gesture.thrust", controller=0, rumble=0.9, duration_ms=120, led=[255, 80, 0], led_duration_ms=120, comment="attack"),
+            _fb(rumble_from="c0.trigger", controller=0, rumble=0.3, comment="dash rumble"),
+        ],
     },
     "osu_taiko": {
         "name": "osu! taiko drums",
@@ -188,8 +206,8 @@ TEMPLATES: dict[str, dict] = {
             _b("c0.button.start", "key.esc", mode="tap"),
         ],
         "feedback": [
-            _fb(when="c0.hit.any", controller=0, rumble=1.0, duration_ms=40, threshold=0.5, comment="drum thump"),
-            _fb(when="c1.hit.any", controller=1, rumble=1.0, duration_ms=40, threshold=0.5, comment="drum thump"),
+            _fb(when="c0.hit.any", controller=0, rumble=1.0, duration_ms=40, threshold=0.5, led=[255, 255, 255], led_duration_ms=40, comment="drum thump + flash"),
+            _fb(when="c1.hit.any", controller=1, rumble=1.0, duration_ms=40, threshold=0.5, led=[255, 255, 255], led_duration_ms=40, comment="drum thump + flash"),
         ],
         "gesture_sensitivity": 1.0,
         "gesture_cooldown_ms": 110,
@@ -208,7 +226,10 @@ TEMPLATES: dict[str, dict] = {
             _b("c1.orient.pitch", "mouse.wheel", mode="mouse", input_range=[-45, 45], deadzone=0.3, scale=0.4),
             _b("c0.button.cross", "key.enter", mode="tap"), _b("c0.button.circle", "key.esc", mode="tap"),
         ],
-        "feedback": [_fb(when="c0.trigger", controller=0, rumble=0.3, duration_ms=50, threshold=0.4)],
+        "feedback": [
+            _fb(when="c0.trigger", controller=0, rumble=0.3, duration_ms=50, threshold=0.4, led=[255, 255, 255], led_duration_ms=60, comment="click"),
+            _fb(when="c0.button.move", controller=0, rumble=0.3, duration_ms=50, led=[255, 160, 0], led_duration_ms=120, comment="right click"),
+        ],
     },
 }
 

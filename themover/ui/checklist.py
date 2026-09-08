@@ -5,11 +5,13 @@ import importlib.util
 import sys
 from dataclasses import dataclass
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 from themover.ui.widgets import WrapLabel
 
 from themover.devices.psmove import HidMoveController
+from themover.links import VIGEMBUS_URL, controller_install_html, link
 from themover.mapping.profile import Profile
 from themover.ui.context import AppContext
 
@@ -51,7 +53,7 @@ def build_items(ctx: AppContext) -> list[Item]:
         elif ctx.settings.controller_backend == "simulated":
             items.append(Item(WARN, f"Controller {i + 1}: simulated (backend set to 'simulated' in Setup)"))
         elif profile_uses_hand(profile, i):
-            items.append(Item(BAD, f"Controller {i + 1} ({hand}): not found. Pair it with PSMoveServiceEx, press its PS button; it is picked up automatically."))
+            items.append(Item(BAD, f"Controller {i + 1} ({hand}): " + controller_install_html()))
         else:
             items.append(Item(OK, f"Controller {i + 1}: not needed by this profile"))
     cam = dev.camera
@@ -75,7 +77,7 @@ def build_items(ctx: AppContext) -> list[Item]:
         elif not ctx.settings.gamepad_enabled:
             items.append(Item(BAD, "Virtual gamepad: disabled in Setup, but this profile uses gamepad buttons"))
         elif sys.platform.startswith("win") and importlib.util.find_spec("vgamepad") is None:
-            items.append(Item(BAD, "Virtual gamepad: vgamepad / ViGEmBus missing (install ViGEmBus; profile uses gamepad buttons)"))
+            items.append(Item(BAD, "Virtual gamepad: this profile uses gamepad buttons; install " + link(VIGEMBUS_URL, "ViGEmBus") + " (free driver)"))
         else:
             items.append(Item(OK, "Virtual gamepad: ready (needs the ViGEmBus driver)"))
     if ctx.settings.effective_api_key:
@@ -102,6 +104,8 @@ class Checklist(QFrame):
             items = problems or [Item(OK, "All set - press PLAY.")]
         while len(self._labels) < len(items):
             lbl = WrapLabel("", muted=False)
+            lbl.setTextFormat(Qt.RichText)
+            lbl.setOpenExternalLinks(True)
             self._layout.addWidget(lbl)
             self._labels.append(lbl)
         for lbl, item in zip(self._labels, items):

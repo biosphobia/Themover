@@ -36,6 +36,7 @@ def test_main_window_starts_and_arms(qapp):
             w.play_tab.refresh()
         assert w.play_tab.checklist._labels and w.play_tab.checklist._labels[0].isVisibleTo(w.play_tab)
         w.setup_tab.refresh()
+        assert w.play_tab.how_to_play.program[0] and w.play_tab.how_to_play.grab().width() > 0
         w.mapping_tab.template_combo.setCurrentIndex(2)
         w.mapping_tab._load_template()
         assert w.mapping_tab.table.rowCount() == len(w.ctx.profile.bindings)

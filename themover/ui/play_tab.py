@@ -8,6 +8,7 @@ from themover.ui.camera_view import CameraView
 from themover.ui.checklist import Checklist, build_items
 from themover.ui.context import AppContext
 from themover.ui.controller_card import ControllerCard
+from themover.ui.how_to_play import HowToPlayWidget
 from themover.ui.widgets import WrapLabel
 
 
@@ -55,6 +56,11 @@ class PlayTab(QWidget):
         root.addLayout(left, 3)
 
         right = QVBoxLayout()
+        how_title = QLabel("How to play")
+        how_title.setObjectName("h2")
+        right.addWidget(how_title)
+        self.how_to_play = HowToPlayWidget()
+        right.addWidget(self.how_to_play)
         cam_title = QLabel("Camera")
         cam_title.setObjectName("h2")
         right.addWidget(cam_title)
@@ -120,6 +126,7 @@ class PlayTab(QWidget):
     def _on_profile_changed(self, profile, reason: str) -> None:
         text = profile.play_style or profile.description
         self.style_box.setPlainText(f"{profile.name}\n\n{text}")
+        self.how_to_play.set_profile(profile)
         if reason in ("saved", "analysis", "created", "deleted", "renamed") or self.ctx.profile_key not in getattr(self, "_keys", []):
             self.reload_profiles()
         elif reason == "edited" and self.ctx.profile_key in getattr(self, "_keys", []):

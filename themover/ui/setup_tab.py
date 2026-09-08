@@ -13,6 +13,7 @@ from themover.config import AVAILABLE_MODELS, save_settings, settings_path
 from themover.devices.psmove import HidMoveController
 from themover.ui.camera_view import CameraView
 from themover.ui.context import AppContext
+from themover.links import controller_install_html
 from themover.ui.widgets import WrapLabel
 from themover.ui.workers import Worker, run_in_background
 from themover.updater import Updater, current_version, remove_override
@@ -56,6 +57,10 @@ class SetupTab(QWidget):
         info = WrapLabel("Pair once with PSMoveServiceEx (then close it). Press PS on a controller to connect. 1 = right hand, 2 = left hand.")
         cl.addWidget(info)
         self.ctrl_status = WrapLabel("…", muted=False); cl.addWidget(self.ctrl_status)
+        self.install_help = WrapLabel("", muted=False)
+        self.install_help.setTextFormat(Qt.RichText); self.install_help.setOpenExternalLinks(True)
+        self.install_help.setVisible(False)
+        cl.addWidget(self.install_help)
         row = QHBoxLayout()
         self.identify_btns = [QPushButton("Buzz 1"), QPushButton("Buzz 2")]
         self.swap_btn = QPushButton("Swap 1 ↔ 2")
@@ -406,6 +411,10 @@ class SetupTab(QWidget):
             batt = "charging" if st.charging else f"battery {int(st.battery * 100)}%"
             lines.append(f"Controller {i + 1}: PS Move {st.serial} · {batt} · {st.output_status or 'LED/rumble: waiting'}")
         self.ctrl_status.setText("\n".join(lines) or "no controllers")
+        none_found = dev.real_controller_count() == 0 and self.ctx.settings.controller_backend != "simulated"
+        if none_found and not self.install_help.isVisible():
+            self.install_help.setText(controller_install_html())
+        self.install_help.setVisible(none_found)
         slots = {c.key: i for i, c in enumerate(dev.controllers) if isinstance(c, HidMoveController)}
         if dev.discovered:
             rows = []

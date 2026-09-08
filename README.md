@@ -51,7 +51,17 @@ AI Coach (Claude) can watch you play for a minute and design a motion mapping fo
 5. **Play**: choose a profile (Driving wheel, Sword & shield, FPS pointer, Boxing, Platformer,
    osu! taiko drums, Generic gamepad, Desktop pointer), start your game, press **PLAY**. Holding
    the **PS button** on controller 1 for a second toggles Play from the couch. The *Ready to play?*
-   checklist on the Play tab tells you exactly what is still missing for the chosen profile.
+   checklist on the Play tab tells you exactly what is still missing for the chosen profile, with
+   direct download links when no controller is found (PSMS Virtual Device Manager + PSMoveService).
+   The **How to play** panel animates both controllers acting out the profile's motions (wheel,
+   tilts, swings, drum strikes, pointing, trigger), with rumble arcs and sphere flashes where the
+   profile gives feedback. It is derived from the bindings, so coach-built profiles get one too.
+
+Every built-in profile uses the whole controller where it fits the game: analog trigger, face
+buttons for menus, orientation, gestures, themed sphere colours (orange/blue for the wheel, red/blue
+drumsticks, ...) and 2-5 feedback rules mixing continuous rumble (engine, dash), impact pulses
+(shots, hits, gear changes) and LED colour flashes (brake-light red, reload green, guard blue). The
+coach is told to do the same for the profiles it designs.
 
 Without any hardware the app still runs with simulated controllers and a synthetic camera so you
 can explore the mapping editor and the AI Coach.

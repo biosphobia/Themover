@@ -35,8 +35,11 @@ DESIGN_GUIDELINES = """HOW TO DESIGN A CONTROL SCHEME
    gamepad.left_stick_x (input_range [-70,70]) or key.a/key.d holds at -15/15; gestures = mode tap (tap_ms 60-180);
    rhythm/drum games = cN.hit.don / cN.hit.kat / cN.hit.any with mode tap, tap_ms 30-40 (low-latency stroke-stop detection; never
    use gesture.* for the drum keys), menu keys on buttons, short rumble on cN.hit.any; the camera is never needed for these.
-6. Feedback with theme: 1-3 rules - engine buzz that follows the throttle (rumble_from), gun kick on trigger, sword clash on swing,
-   flash the sphere on a hit. Choose two clearly different sphere colours; you may theme them (e.g. red/blue for a game's factions).
+6. Use the whole controller when it serves the game: the analog trigger (analog throttle, pressure, hold-to-aim), every face button
+   for menus and secondary actions, orientation for continuous control, gestures for one-shots, and the sphere colours + rumble as
+   part of the theme. Feedback: 2-5 rules - continuous rumble that follows an analog input (rumble_from: engine, charge, drill),
+   short rumble pulses for impacts (shots, hits, gear changes, landing), and LED flashes / colour changes for state (white flash on a
+   hit, red when braking or blocking, green when reloaded, faction colours). Choose two clearly different sphere colours and theme them.
 7. Keep menus reachable on buttons: Start = pause/esc, Cross/Move = confirm, Circle = back.
 """
 
