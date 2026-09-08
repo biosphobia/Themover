@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
 from themover.mapping import vocabulary as V
 from themover.mapping.humanize import describe_binding, describe_feedback
 from themover.mapping.profile import Binding, FeedbackRule, Profile
-from themover.mapping.templates import TEMPLATES, load_template
+from themover.mapping.templates import TEMPLATES
+from themover.profiles import create_from_template, delete_profile, list_profiles, restore_template
 from themover.ui.context import AppContext
 
 
@@ -175,7 +176,7 @@ class MappingTab(QWidget):
 
         tools = QHBoxLayout()
         self.template_combo = QComboBox()
-        self.template_combo.addItem("Start from a template…", "")
+        self.template_combo.addItem("New from template…", "")
         for key in TEMPLATES:
             self.template_combo.addItem(TEMPLATES[key]["name"], key)
         self.load_template_btn = QPushButton("Load template")
@@ -184,16 +185,19 @@ class MappingTab(QWidget):
         self.edit_btn = QPushButton("Edit")
         self.dup_btn = QPushButton("Duplicate")
         self.del_btn = QPushButton("Remove")
-        self.save_btn = QPushButton("Save profile")
-        self.save_btn.setObjectName("accent2")
+        self.save_btn = QPushButton("Save as…")
+        self.reset_btn = QPushButton("Reset to default")
+        self.delete_profile_btn = QPushButton("Delete profile")
         self.export_btn = QPushButton("Export…")
         self.import_btn = QPushButton("Import…")
         for w in (self.template_combo, self.load_template_btn, self.add_btn, self.edit_btn, self.dup_btn, self.del_btn):
             tools.addWidget(w)
         tools.addStretch(1)
-        for w in (self.import_btn, self.export_btn, self.save_btn):
+        for w in (self.import_btn, self.export_btn, self.reset_btn, self.delete_profile_btn, self.save_btn):
             tools.addWidget(w)
         root.addLayout(tools)
+        self.autosave_lbl = QLabel("Changes are saved automatically.")
+        self.autosave_lbl.setObjectName("muted")
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels([c.title() for c in self.COLS])
@@ -230,13 +234,15 @@ class MappingTab(QWidget):
         self.dup_btn.clicked.connect(self._duplicate)
         self.del_btn.clicked.connect(self._delete)
         self.save_btn.clicked.connect(self._save)
+        self.reset_btn.clicked.connect(self._reset)
+        self.delete_profile_btn.clicked.connect(self._delete_profile)
         self.export_btn.clicked.connect(self._export)
         self.import_btn.clicked.connect(self._import)
         self.fb_add.clicked.connect(self._fb_add)
         self.fb_edit.clicked.connect(self._fb_edit)
         self.fb_table.doubleClicked.connect(self._fb_edit)
         self.fb_del.clicked.connect(self._fb_delete)
-        self.coach_hint = QLabel("Easiest way to change things: tell the AI Coach (“make jump a flick up”).")
+        self.coach_hint = QLabel("Every change is saved to this profile automatically. Easiest way to change things: tell the AI Coach (“make jump a flick up”).")
         self.coach_hint.setObjectName("muted"); self.coach_hint.setWordWrap(True)
         root.addWidget(self.coach_hint)
         ctx.advanced_changed.connect(self.set_advanced)
@@ -254,7 +260,7 @@ class MappingTab(QWidget):
         for col in (1, 2, 3):
             self.fb_table.setColumnHidden(col, not on)
         self.fb_widget.setVisible(on)
-        for w in (self.sens, self.cooldown, self.import_btn, self.export_btn, self.dup_btn, self.game_edit):
+        for w in (self.sens, self.cooldown, self.import_btn, self.export_btn, self.dup_btn, self.game_edit, self.delete_profile_btn):
             w.setVisible(on)
         self.sens_label.setVisible(on)
         self.cooldown_label.setVisible(on)
@@ -264,6 +270,7 @@ class MappingTab(QWidget):
     # ------------------------------------------------------------- render
     def _on_profile_changed(self, profile, reason: str) -> None:
         self.populate(profile)
+        self.reset_btn.setVisible(bool(profile.based_on and profile.based_on in TEMPLATES))
 
     def populate(self, profile: Profile) -> None:
         for w in (self.name_edit, self.game_edit, self.sens, self.cooldown):
@@ -316,11 +323,44 @@ class MappingTab(QWidget):
             self.template_combo.setCurrentIndex(0)
 
     def _load_template(self) -> None:
+        """Create a new library profile from the chosen template and switch to it."""
         key = self.template_combo.currentData()
         if not key:
             return
-        self.ctx.profile_key = key
-        self._commit(load_template(key))
+        new_key, profile = create_from_template(key)
+        self.ctx.profile_key = new_key
+        self.ctx.settings.last_profile = new_key
+        self.ctx.apply_profile(profile, reason="created")
+
+    def _reset(self) -> None:
+        p = self.ctx.profile
+        if not p.based_on or p.based_on not in TEMPLATES:
+            return
+        if QMessageBox.question(self, "Reset to default", f"Replace “{p.name}” with the built-in “{TEMPLATES[p.based_on]['name']}” template?") != QMessageBox.Yes:
+            return
+        from themover.mapping.templates import load_template
+
+        fresh = load_template(p.based_on)
+        fresh.based_on = p.based_on
+        fresh.name = p.name if p.name else fresh.name
+        self._commit(fresh)
+
+    def _delete_profile(self) -> None:
+        key = self.ctx.profile_key
+        if not key:
+            return
+        if QMessageBox.question(self, "Delete profile", f"Delete “{self.ctx.profile.name}”? This cannot be undone.") != QMessageBox.Yes:
+            return
+        delete_profile(key)
+        remaining = list_profiles()
+        if not remaining:
+            from themover.profiles import seed_templates
+
+            seed_templates(force=True)
+            remaining = list_profiles()
+        next_key = next(iter(remaining))
+        self.ctx.load_profile_key(next_key)
+        self.ctx.profile_changed.emit(self.ctx.profile, "deleted")
 
     def _add(self) -> None:
         dlg = BindingDialog(parent=self, advanced=self.ctx.advanced)
@@ -357,13 +397,9 @@ class MappingTab(QWidget):
         self._commit(p)
 
     def _save(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save profile", "Profile name:", text=self.ctx.profile.name)
+        name, ok = QInputDialog.getText(self, "Save as", "Name for the copy:", text=self.ctx.profile.name + " copy")
         if ok and name.strip():
-            p = self.ctx.profile.copy()
-            p.name = name.strip()
-            self.ctx.profile = p
-            self.ctx.save_current(name.strip())
-            self.ctx.profile_changed.emit(p, "saved")
+            self.ctx.save_as(name.strip())
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export profile", f"{self.ctx.profile.name}.json", "JSON (*.json)")
@@ -374,9 +410,12 @@ class MappingTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Import profile", "", "JSON (*.json)")
         if path:
             try:
-                self._commit(Profile.load(path))
+                imported = Profile.load(path)
             except Exception as exc:
                 QMessageBox.warning(self, "Import failed", str(exc))
+                return
+            self.ctx.profile_key = ""  # imported profiles become a new library entry
+            self.ctx.apply_profile(imported, reason="created")
 
     def _fb_row(self) -> int:
         rows = self.fb_table.selectionModel().selectedRows()

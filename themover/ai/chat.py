@@ -40,7 +40,7 @@ _FEEDBACK_PROPS = {
 }
 
 TOOLS: list[dict[str, Any]] = [
-    {"name": "get_profile", "description": "Return the currently active mapping profile as JSON, with binding indices.",
+    {"name": "get_profile", "description": "Return the currently active mapping profile as JSON, with binding indices (every profile, built-in or custom, is editable; edits are saved automatically).",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "read_live_signals", "description": "Read the live values of the controller signals right now (orientation, tracking, trigger, pressed buttons, wheel angle). Useful to check calibration or whether a gesture registers.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
@@ -58,7 +58,7 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": {"type": "object", "properties": {"profile": {"type": "object"}}, "required": ["profile"], "additionalProperties": False}},
     {"name": "buzz_controller", "description": "Pulse rumble and/or flash the sphere of a controller so the player can identify it or feel a setting.",
      "input_schema": {"type": "object", "properties": {"controller": {"type": "integer"}, "rumble": {"type": "number"}, "led": {"type": "array", "items": {"type": "integer"}}, "duration_ms": {"type": "integer"}}, "required": ["controller"], "additionalProperties": False}},
-    {"name": "save_profile", "description": "Save the active profile to the player's profile library under a name.",
+    {"name": "save_profile", "description": "Edits are already saved automatically to the active profile. Use this only to store a COPY of the active profile under a new name (e.g. before a big experiment).",
      "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}},
 ]
 

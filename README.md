@@ -127,8 +127,19 @@ Options: `threshold`, `compare`, `input_range`, `deadzone`, `scale`, `invert`, `
 **Feedback**: `{"when": "c0.gesture.swing_any", "controller": 0, "rumble": 0.9, "duration_ms": 120,
 "led": [255,255,255]}` or continuous `{"rumble_from": "c0.trigger", "controller": 0}`.
 
-Profiles live in `%APPDATA%\TheMover\profiles\*.json` and can be exported/imported from the
-Mapping tab.
+### Profile library
+
+Every profile is a JSON file in `%APPDATA%\TheMover\profiles\`. On first run the built-in
+templates are copied there, so they are ordinary profiles: the coach can rewrite them, the editor
+can change any binding, and **every change is saved automatically** to the active profile (no
+Save button to remember). Coach-built profiles land in the same library and behave the same way.
+
+- **New from template…** creates a fresh copy of a built-in template (names get a number if taken).
+- **Save as…** stores a copy under a new name and switches to it.
+- **Reset to default** restores the built-in version of a profile that started from a template.
+- **Delete profile** (Advanced) removes it; a deleted template stays gone until you use
+  *New from template* again.
+- Import/Export (Advanced) move profiles as JSON files.
 
 ### osu! taiko (rhythm games): how hits are detected
 

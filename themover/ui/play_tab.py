@@ -95,8 +95,6 @@ class PlayTab(QWidget):
         self._keys: list[str] = []
         for key, p in list_profiles().items():
             label = f"{p.name}  —  {p.game}" if p.game else p.name
-            if key.startswith("user:"):
-                label = "★ " + label
             self.profile_combo.addItem(label, key)
             self._keys.append(key)
         if self.ctx.profile_key in self._keys:
@@ -122,8 +120,12 @@ class PlayTab(QWidget):
     def _on_profile_changed(self, profile, reason: str) -> None:
         text = profile.play_style or profile.description
         self.style_box.setPlainText(f"{profile.name}\n\n{text}")
-        if reason in ("saved", "analysis") or self.ctx.profile_key not in getattr(self, "_keys", []):
+        if reason in ("saved", "analysis", "created", "deleted", "renamed") or self.ctx.profile_key not in getattr(self, "_keys", []):
             self.reload_profiles()
+        elif reason == "edited" and self.ctx.profile_key in getattr(self, "_keys", []):
+            # Keep the dropdown label in sync with a renamed profile.
+            idx = self._keys.index(self.ctx.profile_key)
+            self.profile_combo.setItemText(idx, f"{profile.name}  —  {profile.game}" if profile.game else profile.name)
         if self.ctx.profile_key in getattr(self, "_keys", []):
             self.profile_combo.blockSignals(True)
             self.profile_combo.setCurrentIndex(self._keys.index(self.ctx.profile_key))

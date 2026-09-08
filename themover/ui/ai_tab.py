@@ -47,7 +47,8 @@ class _Host:
         self.ctx.buzz(controller, rumble, led, duration_ms)
 
     def save_profile(self, name: str) -> str:
-        return "Saved to " + self.ctx.save_current(name)
+        key = self.ctx.save_as(name)
+        return f"Saved a copy as “{self.ctx.profile.name}” ({key}); it is now the active profile."
 
 
 class AITab(QWidget):
@@ -212,13 +213,9 @@ class AITab(QWidget):
     def _on_analysis(self, result) -> None:
         self._set_busy(False)
         p = result.profile
-        self.ctx.profile_key = ""
+        self.ctx.profile_key = ""  # a fresh analysis always becomes its own library profile
         self.ctx.apply_profile(p, reason="analysis")
-        try:
-            path = self.ctx.save_current(p.name)
-        except Exception as exc:
-            path = f"(not saved: {exc})"
-        msg = f"“{p.name}” is ready and active ({len(p.bindings)} controls).\n\nHow to play: {p.play_style}"
+        msg = f"“{p.name}” is ready, active and saved to your profiles ({len(p.bindings)} controls).\n\nHow to play: {p.play_style}"
         analysis = result.analysis_text()
         if analysis:
             msg += "\n\n" + analysis

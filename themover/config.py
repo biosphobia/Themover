@@ -59,7 +59,7 @@ class Settings:
     tick_hz: int = 100
     output_backend: str = "auto"  # auto | sendinput | pynput
     gamepad_enabled: bool = True
-    last_profile: str = "generic_gamepad"
+    last_profile: str = "user:generic_gamepad"
 
     # Recording
     record_seconds: int = 45

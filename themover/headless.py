@@ -13,7 +13,7 @@ from themover.profiles import list_profiles, load_profile
 def run_headless(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="themover --headless")
     parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--profile", default=None, help="template key or user:<name>")
+    parser.add_argument("--profile", default=None, help="profile key, e.g. user:driving_wheel (template names are accepted too)")
     parser.add_argument("--dry-run", action="store_true", help="do not send input to the OS")
     parser.add_argument("--seconds", type=float, default=0.0, help="stop after N seconds (0 = until Ctrl+C)")
     parser.add_argument("--list", action="store_true", help="list available profiles")

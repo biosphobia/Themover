@@ -58,9 +58,9 @@ class MainWindow(QMainWindow):
         self.ctx.status.connect(self._set_status)
 
         # Load last profile and start the engine (devices + camera) in preview mode.
-        self.ctx.load_profile_key(settings.last_profile or "generic_gamepad")
+        self.ctx.load_profile_key(settings.last_profile or "user:generic_gamepad")
         if not self.ctx.profile.bindings:
-            self.ctx.load_profile_key("generic_gamepad")
+            self.ctx.load_profile_key("user:generic_gamepad")
         self.ctx.runtime.start()
         if not settings.effective_api_key:
             self._set_status("Pick a profile and press PLAY. Add a Claude API key in Setup for the AI Coach.")

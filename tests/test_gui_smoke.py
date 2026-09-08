@@ -39,6 +39,17 @@ def test_main_window_starts_and_arms(qapp):
         w.mapping_tab.template_combo.setCurrentIndex(2)
         w.mapping_tab._load_template()
         assert w.mapping_tab.table.rowCount() == len(w.ctx.profile.bindings)
+        assert w.ctx.profile_key.startswith("user:") and w.ctx.profile.based_on
+        # Edits autosave to the active profile file.
+        from themover.profiles import load_profile
+        p = w.ctx.profile.copy()
+        p.bindings.pop()
+        w.ctx.apply_profile(p, reason="edited")
+        assert len(load_profile(w.ctx.profile_key).bindings) == len(p.bindings)
+        # Save as makes a separate copy and switches to it.
+        old_key = w.ctx.profile_key
+        new_key = w.ctx.save_as("Smoke copy")
+        assert new_key != old_key and load_profile(new_key).name == "Smoke copy" and load_profile(old_key).name != "Smoke copy"
         # Simple mode hides raw columns; advanced shows them.
         assert w.mapping_tab.table.isColumnHidden(4) and not w.mapping_tab.table.isColumnHidden(1)
         assert not w.play_tab.cards[0].gauges["roll"].isVisibleTo(w.play_tab)
@@ -89,9 +100,15 @@ def test_ai_tab_recording_signals_and_chat_host(qapp):
         tab.rec_done.emit(Recording(duration=3.0))
         qapp.processEvents()
         assert tab.analyze_btn.isEnabled() and tab.recording is not None
+        ctx.load_profile_key("user:boxing")
         host = _Host(ctx)
-        host.apply_profile(load_template("boxing"))
-        assert ctx.profile.name == "Boxing" and host.get_profile().name == "Boxing"
+        edited = load_template("boxing")
+        edited.name = "Boxing tuned"
+        host.apply_profile(edited)
+        assert ctx.profile.name == "Boxing tuned" and host.get_profile().name == "Boxing tuned"
+        from themover.profiles import load_profile
+        assert load_profile("user:boxing").name == "Boxing tuned"  # coach edits persist to the built-in profile
+        assert "copy" in host.save_profile("Boxing experiment").lower() and ctx.profile_key == "user:boxing_experiment"
         host.buzz(0, 0.5, (9, 9, 9), 100)
         assert ctx.runtime._overrides[0][2] == (9, 9, 9)
     finally:
