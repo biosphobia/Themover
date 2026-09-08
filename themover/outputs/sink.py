@@ -23,6 +23,10 @@ class OutputSink:
     def description(self) -> str:
         return type(self).__name__
 
+    def status(self) -> str:
+        """Human-readable health line ('' when there is nothing to say)."""
+        return ""
+
 
 @dataclass
 class RecordingSink(OutputSink):
@@ -88,6 +92,9 @@ class RecordingSink(OutputSink):
     def description(self) -> str:
         return "dry run (nothing is sent to the game)"
 
+    def status(self) -> str:
+        return f"dry run: {len(self.events)} events recorded"
+
 
 class CompositeSink(OutputSink):
     """Route keyboard/mouse to one backend and gamepad to another."""
@@ -139,3 +146,6 @@ class CompositeSink(OutputSink):
     @property
     def description(self) -> str:
         return f"{self.km.description} + {self.pad.description}"
+
+    def status(self) -> str:
+        return " · ".join(t for t in (self.km.status(), self.pad.status()) if t)

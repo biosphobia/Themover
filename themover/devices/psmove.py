@@ -179,6 +179,21 @@ def battery_level(raw: int) -> tuple[float, bool]:
     return min(max(raw, 0), 5) / 5.0, False
 
 
+def crc_variant(report: bytes) -> bytes:
+    """Same report with a DualShock-4-style CRC32 over (0xA2 + payload) in the last 4 bytes.
+
+    The PS4-era Move (CECH-ZCM2) shares its Bluetooth firmware generation with
+    the DualShock 4, whose output reports are ignored unless they end in this
+    checksum.  Sending both variants costs nothing on a controller that
+    ignores the wrong one.
+    """
+    import zlib
+
+    body = bytes(report[: LED_REPORT_SIZE - 4])
+    crc = zlib.crc32(b"\xa2" + body) & 0xFFFFFFFF
+    return body + crc.to_bytes(4, "little")
+
+
 def build_led_report(r: int, g: int, b: int, rumble: float = 0.0) -> bytes:
     """Output report that sets the sphere colour and rumble strength.
 
@@ -246,36 +261,59 @@ class AutoCalibration:
                 mean_g = sum(g[i] for _, g in window) / len(window)
                 self.gyro_bias[i] = 0.7 * self.gyro_bias[i] + 0.3 * mean_g
 
+    _win: list = field(default_factory=list)  # (dir, gyro_perp_vec*dt) samples of the current window
+
     def _learn_gyro_scale(self, accel_raw: tuple[int, int, int], gyro_raw: tuple[int, int, int], dt: float) -> None:
-        """Refine the gyro scale: while the controller is turned slowly the gravity
-        direction rotates by exactly the angular speed perpendicular to gravity."""
+        """Refine the gyro scale from slow, clean rotations.
+
+        Over a ~0.25 s window the gravity direction must rotate by exactly the
+        angle the gyro (component perpendicular to gravity) integrates to, and
+        around the same axis.  Windows with linear acceleration, too little
+        rotation, or a gyro axis that disagrees with the observed rotation are
+        discarded, so sensor noise can never drive the estimate.
+        """
         s = self.accel_units_per_g or 1.0
         ax, ay, az = accel_raw
         mag = math.sqrt(ax * ax + ay * ay + az * az)
-        if not (0.8 * s <= mag <= 1.2 * s):
-            self._prev_dir = None
+        if not (0.85 * s <= mag <= 1.15 * s):
+            self._win = []
             return
         d = (ax / mag, ay / mag, az / mag)
-        prev = self._prev_dir
-        self._prev_dir = d
-        if prev is None:
-            return
-        cos = max(-1.0, min(1.0, d[0] * prev[0] + d[1] * prev[1] + d[2] * prev[2]))
-        theta = math.acos(cos)  # radians the gravity direction moved this sample
         g = [gyro_raw[i] - self.gyro_bias[i] for i in range(3)]
         along = g[0] * d[0] + g[1] * d[1] + g[2] * d[2]
-        perp = [g[i] - along * d[i] for i in range(3)]
-        omega = math.sqrt(perp[0] ** 2 + perp[1] ** 2 + perp[2] ** 2) * dt  # raw-units * s
-        if 0.004 < theta < 0.35 and omega > 0:
-            self._theta_sum += theta
-            self._omega_sum += omega
-        if self._theta_sum >= 1.2:  # ~70 degrees of slow rotation observed
-            est = self._theta_sum / self._omega_sum
-            lo, hi = self._default_gyro_scale * 0.2, self._default_gyro_scale * 5.0
-            est = max(lo, min(hi, est))
-            self.gyro_rad_per_unit = 0.6 * self.gyro_rad_per_unit + 0.4 * est
-            self.scale_updates += 1
-            self._theta_sum = self._omega_sum = 0.0
+        perp = tuple((g[i] - along * d[i]) * dt for i in range(3))
+        self._win.append((d, perp))
+        if len(self._win) * dt < 0.25:
+            return
+        window, self._win = self._win, []
+        q = max(1, len(window) // 4)
+        d0 = [sum(w[0][i] for w in window[:q]) / q for i in range(3)]
+        d1 = [sum(w[0][i] for w in window[-q:]) / q for i in range(3)]
+        n0 = math.sqrt(sum(c * c for c in d0)) or 1.0
+        n1 = math.sqrt(sum(c * c for c in d1)) or 1.0
+        d0 = [c / n0 for c in d0]
+        d1 = [c / n1 for c in d1]
+        cos = max(-1.0, min(1.0, sum(d0[i] * d1[i] for i in range(3))))
+        theta = math.acos(cos)
+        if not (math.radians(4) <= theta <= math.radians(60)):
+            return
+        omega = [sum(w[1][i] for w in window) for i in range(3)]
+        omega_mag = math.sqrt(sum(c * c for c in omega))
+        if omega_mag <= 0:
+            return
+        # The observed rotation axis (gravity_start x gravity_end) must match the gyro axis.
+        axis = (d0[1] * d1[2] - d0[2] * d1[1], d0[2] * d1[0] - d0[0] * d1[2], d0[0] * d1[1] - d0[1] * d1[0])
+        an = math.sqrt(sum(c * c for c in axis)) or 1.0
+        agreement = abs(sum(axis[i] / an * omega[i] / omega_mag for i in range(3)))
+        if agreement < 0.8:
+            return
+        # theta spans the two quarter centres, omega the whole window: rescale.
+        span = (len(window) - q) / len(window)
+        est = theta / (omega_mag * span)
+        lo, hi = self._default_gyro_scale * 0.1, self._default_gyro_scale * 10.0
+        est = max(lo, min(hi, est))
+        self.gyro_rad_per_unit = 0.7 * self.gyro_rad_per_unit + 0.3 * est
+        self.scale_updates += 1
 
     def convert(self, accel_raw: tuple[int, int, int], gyro_raw: tuple[int, int, int]) -> tuple[Vec3, Vec3]:
         s = self.accel_units_per_g or 1.0
@@ -387,8 +425,6 @@ class HidMoveController(MoveController):
         dev.set_nonblocking(1)
         self._dev = dev
         self.state.connected = True
-        if self.led_method == "control":
-            self._enable_control_pipe()
 
 
     # -- input ---------------------------------------------------------------
@@ -533,31 +569,45 @@ class HidMoveController(MoveController):
     def _send_report(self, report: bytes) -> int:
         """Deliver an output report by every mechanism that could work.
 
-        Windows Bluetooth stacks differ in whether an output report must go
-        through WriteFile (``hid_write``, interrupt pipe) or through
-        ``HidD_SetOutputReport`` (control pipe), and some expose the output
-        report on a second HID collection.  In ``auto`` mode we send through
-        all of them; duplicates are harmless and rate-limited anyway.
+        Windows Bluetooth stacks and controller models differ in whether an
+        output report must go through WriteFile (``hid_write``, interrupt pipe)
+        or ``HidD_SetOutputReport`` (control pipe), *and* which HID collection
+        carries it, *and* (PS4-era ZCM2) whether it needs a CRC trailer.  In
+        ``auto`` mode we send through all combinations; the controller ignores
+        the ones it does not understand and the whole burst is rate-limited.
         """
+        variants = [("plain", report)]
+        if self.model == "zcm2" and self.led_method == "auto":
+            variants.append(("crc", crc_variant(report)))
         results: list[int] = []
-        if self.led_method in ("auto", "write"):
-            results.append(self._hid_write(self._dev, report, "hid_write"))
-            if self.led_method == "auto" and (results[-1] < 0 or _is_windows()):
-                self._open_alt_devices()
-                for dev, label in self._alt_devs:
-                    results.append(self._hid_write(dev, report, label))
-        if self.led_method in ("auto", "control"):
-            if self._control is not None or self._enable_control_pipe():
-                try:
-                    r = self._control.write(report)
-                except Exception as exc:
-                    self.output_error = f"control pipe: {exc}"
-                    r = -1
-                self._count("control", r >= 0)
-                results.append(r)
+        for vname, data in variants:
+            if self.led_method in ("auto", "write"):
+                results.append(self._hid_write(self._dev, data, f"hid_write:{vname}"))
+                if self.led_method == "auto" and (results[-1] < 0 or _is_windows()):
+                    self._open_alt_devices()
+                    for dev, label in self._alt_devs:
+                        results.append(self._hid_write(dev, data, f"{label}:{vname}"))
+            if self.led_method in ("auto", "control"):
+                self._open_control_pipes()
+                for cp, label in self._controls:
+                    try:
+                        r = cp.write(data)
+                        if r < 0:
+                            self.output_error = f"{label} failed (win32 error {cp.last_error})"
+                    except Exception as exc:
+                        self.output_error = f"{label}: {exc}"
+                        r = -1
+                    self._count(f"{label}:{vname}", r >= 0)
+                    results.append(r)
         if not results:
             return -1
         return max(results)
+
+    @staticmethod
+    def _col(path: bytes) -> str:
+        text = path.decode("utf-8", "replace")
+        i = text.lower().find("col")
+        return text[i:i + 5] if i >= 0 else text[-10:]
 
     def _open_alt_devices(self) -> None:
         if self._alt_tried or hid is None:
@@ -568,9 +618,32 @@ class HidMoveController(MoveController):
                 dev = hid.device()
                 dev.open_path(path)
                 dev.set_nonblocking(1)
-                self._alt_devs.append((dev, f"hid_write[{path.decode('utf-8', 'replace')[-12:]}]"))
+                self._alt_devs.append((dev, f"hid_write[{self._col(path)}]"))
             except Exception as exc:
                 log.debug("alt path %r not opened: %s", path, exc)
+
+    _controls: list = None  # [(ControlPipeWriter, label)]
+    _controls_tried: bool = False
+
+    def _open_control_pipes(self) -> None:
+        """Open HidD_SetOutputReport writers on every collection of this controller (Windows)."""
+        if self._controls_tried:
+            return
+        self._controls_tried = True
+        self._controls = []
+        if self.led_method == "control" or _is_windows():
+            for path in [self.path] + list(self.alt_paths):
+                try:
+                    from themover.devices.winhid import ControlPipeWriter
+
+                    cp = ControlPipeWriter(path)
+                    self._controls.append((cp, f"control[{self._col(path)} {cp.describe()}]"))
+                except Exception as exc:
+                    log.debug("control pipe on %r unavailable: %s", path, exc)
+                    if self.led_method == "control":
+                        self.output_error = f"control pipe unavailable: {exc}"
+        if self._controls:
+            self._control = self._controls[0][0]
 
     _control_failed: bool = False
 
@@ -607,9 +680,14 @@ class HidMoveController(MoveController):
             except Exception:
                 pass
         self._alt_devs = []
-        if self._control is not None:
-            self._control.close()
-            self._control = None
+        for cp, _label in self._controls or []:
+            try:
+                cp.close()
+            except Exception:
+                pass
+        self._controls = []
+        self._controls_tried = False
+        self._control = None
         self._dev = None
         self.state.connected = False
 
@@ -712,7 +790,8 @@ def enumerate_controllers(entries=None) -> list[DiscoveredMove]:
         if isinstance(path, str):
             path = path.encode()
         serial = _normalise_serial(entry.get("serial_number") or "")
-        interface = "bluetooth" if ":" in serial else "usb"
+        bt_path = b"00001124-0000-1000-8000-00805f9b34fb" in path.lower()  # Bluetooth HID service GUID
+        interface = "bluetooth" if (":" in serial or len(serial) == 12 or bt_path) else "usb"
         d = DiscoveredMove(path=path, model=PSMOVE_PIDS[pid], serial=serial, interface=interface)
         usage = (entry.get("usage_page", 0), entry.get("usage", 0))
         prev = by_key.get(d.key)
@@ -743,14 +822,22 @@ def hid_diagnostics(controllers: Optional[list] = None) -> str:
         lines.append(f"{d.label}")
         for path, usage in zip(d.paths, d.usages):
             mark = "*" if path == d.path else " "
-            lines.append(f"  {mark} usage_page=0x{usage[0]:04x} usage=0x{usage[1]:04x} path={path.decode('utf-8', 'replace')}")
+            caps = ""
+            try:
+                from themover.devices.winhid import collection_caps
+
+                caps_text = collection_caps(path)
+                caps = f" reports[{caps_text}]" if caps_text else ""
+            except Exception:
+                pass
+            lines.append(f"  {mark} usage_page=0x{usage[0]:04x} usage=0x{usage[1]:04x}{caps} path={path.decode('utf-8', 'replace')}")
     for c in controllers or []:
         if not isinstance(c, HidMoveController):
             continue
         st = c.state
         cal = c.calibration
         lines.append(
-            f"slot {st.index + 1}: {c.output_status()} · reports={c.reports} @ {c.report_rate:.0f} Hz · "
+            f"slot {st.index + 1}: {c.output_status()} · reports={c.reports} @ {c.report_rate:.0f} Hz · hits={st.hit_count} ({st.last_hit or '-'}) · "
             f"accel=({st.accel.x:+.2f},{st.accel.y:+.2f},{st.accel.z:+.2f}) g gyro=({math.degrees(st.gyro.x):+.0f},{math.degrees(st.gyro.y):+.0f},{math.degrees(st.gyro.z):+.0f}) deg/s · "
             f"cal: accel {cal.accel_units_per_g:.0f}/g, gyro {cal.gyro_rad_per_unit:.6f} rad/unit ({cal.scale_updates} refinements), bias {[round(b, 1) for b in cal.gyro_bias]}, still {cal.still_samples}"
         )

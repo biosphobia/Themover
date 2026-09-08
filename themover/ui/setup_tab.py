@@ -78,12 +78,14 @@ class SetupTab(QWidget):
         self.led_method.setToolTip("How LED/rumble reports are sent. auto = hid_write, falling back to the Windows control pipe if writes fail.")
         self.recenter_btn = QPushButton("Re-centre yaw (point both at the screen, then click)")
         self.diag_btn = QPushButton("Copy HID diagnostics (for bug reports)")
+        self.kbtest_btn = QPushButton("Test keyboard output (types 'themover' after 3 s)")
         self.motion_lbl = WrapLabel("")
         al.addWidget(self.rescan_btn, 0, 0); al.addWidget(self.forget_btn, 0, 1)
         al.addWidget(QLabel("Controller backend"), 1, 0); al.addWidget(self.backend, 1, 1)
         al.addWidget(QLabel("LED / rumble method"), 2, 0); al.addWidget(self.led_method, 2, 1)
         al.addWidget(self.recenter_btn, 3, 0, 1, 2)
-        al.addWidget(self.diag_btn, 4, 0, 1, 2)
+        al.addWidget(self.diag_btn, 4, 0)
+        al.addWidget(self.kbtest_btn, 4, 1)
         al.addWidget(self.motion_lbl, 5, 0, 1, 2)
         cl.addWidget(adv); self._advanced_widgets.append(adv)
         left.addWidget(card)
@@ -198,6 +200,7 @@ class SetupTab(QWidget):
         self.led_method.currentTextChanged.connect(self._led_method_changed)
         self.recenter_btn.clicked.connect(lambda: self.ctx.runtime.devices.reset_yaw())
         self.diag_btn.clicked.connect(self._diagnostics)
+        self.kbtest_btn.clicked.connect(self._keyboard_test)
         self.show_key.toggled.connect(lambda on: self.api_key.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
         self.test_btn.clicked.connect(self._test)
         self.api_key.editingFinished.connect(self.save)
@@ -330,10 +333,41 @@ class SetupTab(QWidget):
         self.test_status.setText("Saved, but the test failed: " + err.split("\n")[0])
 
     # ------------------------------------------------------- controllers
+    def _keyboard_test(self) -> None:
+        """Type a word into whatever window has focus in 3 s, then report SendInput results."""
+        from PySide6.QtCore import QTimer
+
+        from themover.outputs.keyboard_mouse import create_keyboard_mouse_sink
+
+        self.motion_lbl.setText("Click into Notepad or the game now… typing in 3 s")
+
+        def go() -> None:
+            import time
+
+            sink = create_keyboard_mouse_sink(self.ctx.settings.output_backend)
+            for ch in "themover":
+                sink.key_down(ch)
+                time.sleep(0.03)
+                sink.key_up(ch)
+                time.sleep(0.03)
+            status = sink.status() or f"sent via {sink.description}"
+            recent = " | ".join(getattr(sink, "recent", [])[-4:])
+            sink.close()
+            self.motion_lbl.setText(f"Keyboard test: {status}" + (f"  [{recent}]" if recent else ""))
+
+        QTimer.singleShot(3000, go)
+
     def _diagnostics(self) -> None:
         import logging
 
         text = hid_diagnostics(self.ctx.runtime.devices.controllers)
+        sink = self.ctx.runtime.sink
+        text += f"\noutput: {sink.description} · armed={self.ctx.armed} · {sink.status() or 'no status'}"
+        recent = getattr(sink, "recent", None) or getattr(getattr(sink, "km", None), "recent", None)
+        if recent:
+            text += "\nrecent sends: " + " | ".join(recent[-8:])
+        text += f"\nprofile: {self.ctx.profile.name} ({len(self.ctx.profile.bindings)} bindings, fast sources {sorted(self.ctx.runtime.engine.fast_sources)})"
+        text += f"\nengine: ticks={self.ctx.runtime.engine.stats.ticks} rate={self.ctx.runtime.tick_rate:.0f} Hz active={sorted(self.ctx.runtime.engine.stats.active_targets)} hits logged={len(self.ctx.runtime.hit_log)}"
         logging.getLogger("themover.diagnostics").info("HID diagnostics:\n%s", text)
         from PySide6.QtWidgets import QApplication
 

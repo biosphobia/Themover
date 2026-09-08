@@ -45,7 +45,11 @@ class WindowsSendInput(OutputSink):  # pragma: no cover - Windows only
         from ctypes import wintypes
 
         self.ctypes = ctypes
-        self.user32 = ctypes.windll.user32
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.sent = 0
+        self.failed = 0
+        self.last_error = 0
+        self.recent: list[str] = []
         ULONG_PTR = ctypes.c_size_t
 
         class MOUSEINPUT(ctypes.Structure):
@@ -74,8 +78,16 @@ class WindowsSendInput(OutputSink):  # pragma: no cover - Windows only
         self.screen_w = self.user32.GetSystemMetrics(0)
         self.screen_h = self.user32.GetSystemMetrics(1)
 
-    def _send(self, inp) -> None:
-        self.user32.SendInput(1, self.ctypes.byref(inp), self.ctypes.sizeof(inp))
+    def _send(self, inp, what: str = "") -> None:
+        n = self.user32.SendInput(1, self.ctypes.byref(inp), self.ctypes.sizeof(inp))
+        if n == 1:
+            self.sent += 1
+        else:
+            self.failed += 1
+            self.last_error = self.ctypes.get_last_error()
+        if what:
+            self.recent.append(f"{what} {'ok' if n == 1 else f'FAILED err {self.last_error}'}")
+            del self.recent[:-12]
 
     def _key(self, key: str, up: bool) -> None:
         vk = vk_code(key)
@@ -89,7 +101,7 @@ class WindowsSendInput(OutputSink):  # pragma: no cover - Windows only
             flags |= 0x0002  # KEYEVENTF_KEYUP
         inp = self.INPUT(type=1)
         inp.ki = self.KEYBDINPUT(0, scan, flags, 0, 0)
-        self._send(inp)
+        self._send(inp, f"key {key} {'up' if up else 'down'} (scan 0x{scan:02x})")
 
     def key_down(self, key: str) -> None:
         self._key(key, False)
@@ -143,6 +155,14 @@ class WindowsSendInput(OutputSink):  # pragma: no cover - Windows only
     @property
     def description(self) -> str:
         return "Windows SendInput (scan-codes)"
+
+    def status(self) -> str:
+        if self.failed and not self.sent:
+            hint = " - Windows blocks input to programs running as administrator unless The Mover also runs as administrator" if self.last_error == 5 else ""
+            return f"keyboard/mouse output BLOCKED (SendInput error {self.last_error}){hint}"
+        if self.failed:
+            return f"keyboard/mouse output: {self.sent} sent, {self.failed} failed (error {self.last_error})"
+        return f"keyboard/mouse output: {self.sent} events sent" if self.sent else "keyboard/mouse output: nothing sent yet"
 
 
 class PynputSink(OutputSink):

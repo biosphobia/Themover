@@ -165,7 +165,7 @@ def test_led_writer_rate_limits_and_keeps_alive(monkeypatch):
     c._last_write -= P.LED_KEEPALIVE_SECONDS
     c.flush_outputs()
     assert len(dev.writes) == 3
-    assert c.state.output_status.startswith("LED/rumble sent") and c.write_results["hid_write"] == [3, 0]
+    assert c.state.output_status.startswith("LED/rumble sent") and c.write_results["hid_write:plain"] == [3, 0]
 
 
 def test_short_rumble_pulse_is_latched(monkeypatch):
@@ -261,3 +261,48 @@ def test_hid_diagnostics_mentions_status(monkeypatch):
     c.apply_outputs_now()
     text = P.hid_diagnostics([c])
     assert "slot 1" in text and "LED/rumble sent" in text and "cal:" in text
+
+
+def test_crc_variant_has_ds4_style_trailer():
+    import zlib
+
+    rep = P.build_led_report(10, 20, 30, 0.5)
+    v = P.crc_variant(rep)
+    assert len(v) == 49 and v[:45] == rep[:45]
+    assert int.from_bytes(v[45:], "little") == zlib.crc32(b"\xa2" + rep[:45]) & 0xFFFFFFFF
+
+
+def test_zcm2_sends_plain_and_crc_variants(monkeypatch):
+    dev = _Dev()
+
+    class H:
+        @staticmethod
+        def device():
+            return dev
+    monkeypatch.setattr(P, "hid", H)
+    c = P.HidMoveController(0, b"col01", "zcm2", "90895fd457b5", led_method="auto", alt_paths=[b"col02"])
+    c.open()
+    c.set_led(1, 2, 3)
+    c.apply_outputs_now()
+    labels = set(c.write_results)
+    assert "hid_write:plain" in labels and "hid_write:crc" in labels
+    assert dev.writes[0][:5] == bytes([2, 0, 1, 2, 3]) and dev.writes[1][:45] == dev.writes[0][:45] and dev.writes[1][45:] != bytes(4)
+
+
+def test_bluetooth_detected_from_12_hex_serial_and_path():
+    entries = [
+        {"vendor_id": P.PSMOVE_VID, "product_id": P.PSMOVE_PID_ZCM2, "path": b"\\\\?\\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054c_PID&0c5e&Col01#8&1&0000", "serial_number": "90895FD457B5", "usage_page": 1},
+    ]
+    found = P.enumerate_controllers(entries)
+    assert found[0].interface == "bluetooth" and found[0].serial == "90895fd457b5" and found[0].model == "zcm2"
+
+
+def test_gyro_scale_ignores_sensor_noise():
+    import random
+
+    rnd = random.Random(1)
+    cal = P.AutoCalibration(accel_units_per_g=4096.0, gyro_rad_per_unit=0.001)
+    for _ in range(4000):  # resting controller with accelerometer noise at ~400 Hz
+        accel = (int(rnd.gauss(0, 40)), int(rnd.gauss(0, 40)), int(4096 + rnd.gauss(0, 40)))
+        cal.feed(accel, (int(rnd.gauss(0, 3)), int(rnd.gauss(0, 3)), int(rnd.gauss(0, 3))), 1 / 400)
+    assert cal.scale_updates == 0 and cal.gyro_rad_per_unit == 0.001

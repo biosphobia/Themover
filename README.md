@@ -217,10 +217,17 @@ the motor. Each controller's write health is shown in Setup ("LED/rumble ok [hid
 says *NOT working*:
 
 1. Make sure PSMoveService is closed (it overrides colours and rumble).
-2. In `auto` mode The Mover already sends every report through `hid_write` **and** the Windows
-   control pipe (`HidD_SetOutputReport`), on every HID collection the controller exposes, because
-   Bluetooth stacks disagree about which one carries output reports. The status shows per-method
-   success counts, e.g. `hid_write 12/12, control 12/12`.
+2. In `auto` mode The Mover sends every report through `hid_write` **and** the Windows control
+   pipe (`HidD_SetOutputReport`), on **every** HID collection the controller exposes (a Bluetooth
+   PS Move shows up as Col01 plus vendor collections Col02/Col03), and for the PS4-era model
+   (CECH-ZCM2) additionally as a variant with a DualShock-4-style CRC32 trailer. The controller
+   ignores the combinations it does not understand. The status shows per-method success counts,
+   e.g. `hid_write:plain 12/12, control[Col02 in=.. out=49 ..]:crc 12/12`; the collection whose
+   `out=` size is non-zero is the one that really carries the output report.
+4. If the game does not react to keys either, use Advanced → **Test keyboard output**: it types
+   `themover` into the focused window and reports each `SendInput` result. `error 5` means Windows
+   blocked the input because the game runs as administrator; run The Mover as administrator too.
+   The Play checklist shows the same output health while playing.
 3. Advanced → **Copy HID diagnostics** puts the HID collections, paths, write results, report rate,
    live accelerometer / gyro readings and calibration state on the clipboard; paste that into a bug
    report. It is also written to `%APPDATA%\TheMover\themover.log`.

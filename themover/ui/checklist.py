@@ -80,6 +80,11 @@ def build_items(ctx: AppContext) -> list[Item]:
             items.append(Item(BAD, "Virtual gamepad: this profile uses gamepad buttons; install " + link(VIGEMBUS_URL, "ViGEmBus") + " (free driver)"))
         else:
             items.append(Item(OK, "Virtual gamepad: ready (needs the ViGEmBus driver)"))
+    if ctx.armed:
+        status = ctx.runtime.sink.status()
+        if status:
+            level = BAD if "BLOCKED" in status else WARN if "failed" in status else OK
+            items.append(Item(level, status))
     if ctx.settings.effective_api_key:
         items.append(Item(OK, "Claude API key: set (AI Coach available)"))
     else:
