@@ -9,3 +9,4 @@ dist/
 venv/
 .env
 themover.log
+themover/_build.json

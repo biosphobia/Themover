@@ -55,15 +55,34 @@ def test_schema_is_strict_json():
     assert set(b["required"]) == set(b["properties"].keys())
 
 
-def test_profile_library_roundtrip():
-    keys = list(list_profiles().keys())
-    assert set(TEMPLATES).issubset(keys)
+def test_profile_library_seeds_templates_and_edits_persist():
+    from themover.profiles import create_from_template, resolve_key, restore_template, seed_templates
+
+    lib = list_profiles()  # first call seeds the built-in templates as ordinary profiles
+    assert set(f"user:{k}" for k in TEMPLATES).issubset(lib)
+    assert lib["user:driving_wheel"].based_on == "driving_wheel"
+    assert list(lib)[: len(TEMPLATES)] == [f"user:{k}" for k in TEMPLATES]  # templates first, in order
+    # Old-style keys still resolve.
+    assert resolve_key("driving_wheel") == "user:driving_wheel" and resolve_key("user:x") == "user:x"
+    # Editing a seeded template is saved in place, like any profile.
     p = load_profile("driving_wheel")
     p.name = "My Racer"
-    path = save_profile(p)
-    assert path.exists()
-    lib = list_profiles()
-    assert "user:my_racer" in lib and lib["user:my_racer"].name == "My Racer"
-    assert load_profile("user:my_racer").bindings
-    assert delete_profile("user:my_racer") and "user:my_racer" not in list_profiles()
-    assert not delete_profile("driving_wheel")
+    p.bindings.pop()
+    assert save_profile(p, "user:driving_wheel") == "user:driving_wheel"
+    again = load_profile("user:driving_wheel")
+    assert again.name == "My Racer" and len(again.bindings) == len(TEMPLATES["driving_wheel"]["bindings"]) - 1
+    # Reset brings the pristine template back.
+    assert restore_template("user:driving_wheel") == "user:driving_wheel"
+    assert load_profile("user:driving_wheel").name == "Driving wheel"
+    # New from template never overwrites; names get a suffix.
+    key, prof = create_from_template("boxing")
+    assert key == "user:boxing_2" and prof.name == "Boxing 2" and prof.based_on == "boxing"
+    key2, _ = create_from_template("boxing", name="Ring Night")
+    assert key2 == "user:ring_night"
+    # Save without a key creates a new unique file; deleting a seeded template stays deleted.
+    fresh = Profile(name="Ring Night", bindings=[Binding("c0.trigger", "key.a")])
+    assert save_profile(fresh) == "user:ring_night_2"
+    assert delete_profile("user:platformer") and "user:platformer" not in list_profiles()
+    assert seed_templates() == []  # already seeded: nothing comes back on its own
+    assert "user:platformer" in seed_templates(force=True) and "user:platformer" in list_profiles()
+    assert not delete_profile("user:does_not_exist")

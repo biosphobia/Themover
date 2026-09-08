@@ -26,6 +26,8 @@ class Runtime:
         self.sink: OutputSink = sink or RecordingSink()
         self.engine = MappingEngine(self.sink)
         self.engine.on_feedback = self._apply_feedback
+        self.devices.on_hit = self._on_hit
+        self.hit_log: list[tuple[float, int, str, float]] = []  # (t, controller, kind, strength) - last 200
         self.profile = Profile()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -49,10 +51,19 @@ class Runtime:
             self.devices.stop()
             self.devices_started = False
 
+    @staticmethod
+    def profile_uses_hits(profile: Profile) -> bool:
+        return any(b.enabled and ".hit." in b.source for b in profile.bindings)
+
     def set_profile(self, profile: Profile) -> None:
         with self._lock:
             self.profile = profile
             self.engine.set_profile(profile)
+            rhythm = self.profile_uses_hits(profile)
+            self.engine.fast_sources = {b.source for b in profile.bindings if b.enabled and ".hit." in b.source and b.effective_mode() == "tap"}
+            self.devices.set_low_latency(rhythm)
+            for det in self.devices.hits:
+                det.reset()
             for i, c in enumerate(profile.controllers[:2]):
                 self.devices.set_color(i, tuple(c.color))
             for g in self.devices.gestures:
@@ -143,6 +154,7 @@ class Runtime:
             gesture_strength=self.devices.gesture_strength,
             angular_speed=lambda i: self.devices.gestures[i].angular_speed if i < len(self.devices.gestures) else 0.0,
             wheel_angle=self.devices.wheel_angle,
+            hit_value=self.devices.hit_value,
         )
         with self._lock:
             self.engine.tick(reader, dt)
@@ -158,6 +170,16 @@ class Runtime:
         if index < len(self.profile.controllers):
             return tuple(self.profile.controllers[index].color)  # type: ignore[return-value]
         return (255, 255, 255)
+
+    def _on_hit(self, index: int, hit) -> None:
+        """Runs on the controller's reader thread: press the mapped keys right now."""
+        self.hit_log.append((hit.t, index, hit.kind, hit.strength))
+        del self.hit_log[:-200]
+        for source in (f"c{index}.hit.{hit.kind}", f"c{index}.hit.any"):
+            if source not in self.engine.fast_sources:
+                continue
+            for b in self.engine.fast_bindings_for(source):
+                self.engine.fast_tap(b.target, b.tap_ms)
 
     def _apply_feedback(self, index: int, rumble: float, led: Optional[tuple[int, int, int]]) -> None:
         override = self._overrides.get(index)
@@ -189,6 +211,7 @@ class Runtime:
             gesture_strength=self.devices.gesture_strength,
             angular_speed=lambda i: self.devices.gestures[i].angular_speed if i < len(self.devices.gestures) else 0.0,
             wheel_angle=self.devices.wheel_angle,
+            hit_value=self.devices.hit_value,
         )
         out: dict[str, float] = {}
         for i in range(len(world.controllers)):
@@ -199,4 +222,7 @@ class Runtime:
                     out[f"c{i}.button.{btn}"] = 1.0
         out["wheel.angle"] = round(self.devices.wheel_angle, 1)
         out["both.distance"] = round(reader.read("both.distance"), 3)
+        for i, c in enumerate(world.controllers):
+            if c.hit_count:
+                out[f"c{i}.hits"] = float(c.hit_count)
         return out

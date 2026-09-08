@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -21,9 +22,10 @@ class SignalReader:
     def __init__(self, world: WorldState, gesture_value: Optional[GestureReader] = None,
                  gesture_strength: Optional[Callable[[int], float]] = None,
                  angular_speed: Optional[Callable[[int], float]] = None,
-                 wheel_angle: float = 0.0) -> None:
+                 wheel_angle: float = 0.0, hit_value: Optional[GestureReader] = None) -> None:
         self.world = world
         self.gesture_value = gesture_value or (lambda i, n: 0.0)
+        self.hit_value = hit_value or (lambda i, n: 0.0)
         self.gesture_strength = gesture_strength or (lambda i: 0.0)
         self.angular_speed = angular_speed or (lambda i: 0.0)
         self.wheel_angle = wheel_angle
@@ -55,6 +57,8 @@ class SignalReader:
             return st.trigger
         if group == "gesture":
             return self.gesture_value(idx, member)
+        if group == "hit":
+            return self.hit_value(idx, member)
         if group == "orient":
             return {"roll": st.roll, "pitch": st.pitch, "yaw": st.yaw}.get(member, 0.0)
         if group == "accel":
@@ -169,6 +173,11 @@ class MappingEngine:
         self.axis_accumulator: dict[str, float] = {}
         self._pressed_buttons: dict[str, int] = {}  # target -> number of bindings holding it
         self._screen = [0.5, 0.5]
+        # Fast path: sources handled outside the tick (drum hits). Bindings on these
+        # sources are skipped by tick(); fast_tap() presses their targets directly.
+        self.fast_sources: set[str] = set()
+        self._fast_held: dict[str, int] = {}
+        self._lock = threading.RLock()
 
     # ----------------------------------------------------------------- setup
     def set_profile(self, profile: Profile) -> None:
@@ -178,19 +187,60 @@ class MappingEngine:
         self._fb_states = [_FeedbackState() for _ in self.profile.feedback]
 
     def release_all(self) -> None:
-        self._pressed_buttons.clear()
-        self.sink.release_all()
-        self.sink.flush()
+        with self._lock:
+            self._pressed_buttons.clear()
+            self._fast_held.clear()
+            self.sink.release_all()
+            self.sink.flush()
+
+    # ------------------------------------------------------------ fast path
+    def fast_bindings_for(self, source: str) -> list[Binding]:
+        return [b for b in self.profile.bindings if b.enabled and b.source == source and V.target_kind(b.target) == "button"]
+
+    def fast_tap(self, target: str, tap_ms: int) -> None:
+        """Press a button target immediately (from any thread) and release it after tap_ms."""
+        with self._lock:
+            self._fast_held[target] = self._fast_held.get(target, 0) + 1
+            if self._pressed_buttons.get(target, 0) == 0:
+                self._press(target, True)
+                self._pressed_buttons[target] = 1
+            self.sink.flush()
+        timer = threading.Timer(max(0.005, tap_ms / 1000.0), self._fast_release, args=(target,))
+        timer.daemon = True
+        timer.start()
+
+    def _fast_release(self, target: str) -> None:
+        with self._lock:
+            n = self._fast_held.get(target, 0) - 1
+            if n > 0:
+                self._fast_held[target] = n
+                return
+            self._fast_held.pop(target, None)
+            if self._pressed_buttons.get(target, 0) and target not in self._wanted_last:
+                self._press(target, False)
+                self._pressed_buttons.pop(target, None)
+                self.sink.flush()
+
+    _wanted_last: set[str] = set()
 
     # -------------------------------------------------------------- one tick
     def tick(self, reader: SignalReader, dt: float, now: Optional[float] = None) -> None:
         now = time.monotonic() if now is None else now
         t0 = time.perf_counter()
+        self._lock.acquire()
+        try:
+            self._tick_locked(reader, dt, now)
+        finally:
+            self._lock.release()
+        self.stats.ticks += 1
+        self.stats.last_tick_ms = (time.perf_counter() - t0) * 1000.0
+
+    def _tick_locked(self, reader: SignalReader, dt: float, now: float) -> None:
         self.axis_accumulator = {}
         self.stats.active_targets = set()
         wanted_buttons: dict[str, bool] = {}
         for b, st in zip(self.profile.bindings, self._states):
-            if not b.enabled:
+            if not b.enabled or b.source in self.fast_sources:
                 continue
             value = reader.read(b.source)
             self.last_values[b.source] = value
@@ -204,9 +254,10 @@ class MappingEngine:
             elif mode == "absolute":
                 self._tick_absolute(b, st, value)
 
-        # Apply button targets (a target is down if any binding wants it down).
+        # Apply button targets (a target is down if any binding - or a fast tap - wants it down).
+        self._wanted_last = {t for t, w in wanted_buttons.items() if w}
         for target in set(list(wanted_buttons.keys()) + list(self._pressed_buttons.keys())):
-            want = wanted_buttons.get(target, False)
+            want = wanted_buttons.get(target, False) or self._fast_held.get(target, 0) > 0
             is_down = self._pressed_buttons.get(target, 0) > 0
             if want and not is_down:
                 self._press(target, True)
@@ -233,8 +284,6 @@ class MappingEngine:
         self._flush_mouse_motion()
         self._tick_feedback(reader, now)
         self.sink.flush()
-        self.stats.ticks += 1
-        self.stats.last_tick_ms = (time.perf_counter() - t0) * 1000.0
 
     # ------------------------------------------------------------- helpers
     def _press(self, target: str, down: bool) -> None:

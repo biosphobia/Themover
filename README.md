@@ -20,6 +20,9 @@ AI Coach (Claude) can watch you play for a minute and design a motion mapping fo
   Claude edits the live profile with tools, changes apply instantly.
 - **Regular mapping too**: a full editor for bindings, curves, deadzones, thresholds, feedback rules,
   templates, import/export.
+- **Simple by default, Advanced on demand**: the app shows plain-English mappings ("Strike down with
+  right hand → Key J") and a readiness checklist; the **Advanced** switch in the header reveals raw
+  signal names, every numeric option and all device/engine settings for pro users.
 
 ---
 
@@ -47,14 +50,25 @@ AI Coach (Claude) can watch you play for a minute and design a motion mapping fo
      switched on or off at any time; The Mover rescans every 3 seconds.
 5. **Play**: choose a profile (Driving wheel, Sword & shield, FPS pointer, Boxing, Platformer,
    osu! taiko drums, Generic gamepad, Desktop pointer), start your game, press **PLAY**. Holding
-   the **PS button** on controller 1 for a second toggles Play from the couch.
+   the **PS button** on controller 1 for a second toggles Play from the couch. The *Ready to play?*
+   checklist on the Play tab tells you exactly what is still missing for the chosen profile, with
+   direct download links when no controller is found (PSMS Virtual Device Manager + PSMoveService).
+   The **How to play** panel animates both controllers acting out the profile's motions (wheel,
+   tilts, swings, drum strikes, pointing, trigger), with rumble arcs and sphere flashes where the
+   profile gives feedback. It is derived from the bindings, so coach-built profiles get one too.
+
+Every built-in profile uses the whole controller where it fits the game: analog trigger, face
+buttons for menus, orientation, gestures, themed sphere colours (orange/blue for the wheel, red/blue
+drumsticks, ...) and 2-5 feedback rules mixing continuous rumble (engine, dash), impact pulses
+(shots, hits, gear changes) and LED colour flashes (brake-light red, reload green, guard blue). The
+coach is told to do the same for the profiles it designs.
 
 Without any hardware the app still runs with simulated controllers and a synthetic camera so you
 can explore the mapping editor and the AI Coach.
 
 ## 2. AI Coach (Claude)
 
-1. **Settings** → paste your Anthropic API key (console.anthropic.com) → **Save** / **Test key**.
+1. **Setup** → paste your Anthropic API key (console.anthropic.com) → **Save & test**.
    The key is stored only in your user profile folder (`%APPDATA%\TheMover\settings.json`).
 2. **AI Coach** → optionally type the game name and a note ("I want to swing to attack") →
    **Record** → alt-tab into the game and play normally for the countdown. The Mover takes ~1
@@ -65,7 +79,30 @@ can explore the mapping editor and the AI Coach.
    controller signals, add/modify/remove bindings, change feedback rules, colours and sensitivity,
    buzz a controller or save the profile.
 
-Default model: `claude-opus-5` (changeable in Settings). Requests use adaptive thinking, prompt
+How the coach thinks: it first works out what the game is and what every input does (held keys =
+movement, taps = actions, continuous mouse = aim), then commits to one physical metaphor themed to
+that game (a steering wheel for racing, holding the right controller like a gun with a flick to
+reload for shooters, sword and shield for melee, drumsticks for rhythm games) and keeps it playable:
+essentials on tilt, triggers and buttons, gestures for the satisfying occasional actions. It uses
+only the features that add fun, and the camera only where it clearly helps (light-gun pointing,
+two-hand wheel, boxing lean). Its structured analysis (game, genre, inputs, metaphor, why the
+camera was or was not used, playability concerns) is shown after each build.
+
+### Coach logs
+
+Every analysis and chat turn is written to `%APPDATA%\TheMover\coach_logs\`:
+
+- `coach_log.jsonl`: one JSON line per event with the recording summary, the structured analysis,
+  the resulting profile, tool calls made during chat, Claude's summarised reasoning, model, token
+  usage and timing.
+- `analysis-<timestamp>.md`: a readable report per build (what the coach saw, its analysis and
+  reasoning summary, the play style, the bindings).
+- Recordings themselves (screenshots + input events) stay in `recordings\<timestamp>\`.
+
+Past chat feedback about the same game is fed back into the next analysis of that game, so
+"aim is too fast" said once is remembered next time you rebuild the controls.
+
+Default model: `claude-opus-5` (changeable under Advanced in Setup). Requests use adaptive thinking, prompt
 caching for the stable system prompt, and the server-side refusal fallback, so a declined request
 is automatically retried on a fallback model.
 
@@ -100,27 +137,123 @@ Options: `threshold`, `compare`, `input_range`, `deadzone`, `scale`, `invert`, `
 **Feedback**: `{"when": "c0.gesture.swing_any", "controller": 0, "rumble": 0.9, "duration_ms": 120,
 "led": [255,255,255]}` or continuous `{"rumble_from": "c0.trigger", "controller": 0}`.
 
-Profiles live in `%APPDATA%\TheMover\profiles\*.json` and can be exported/imported from the
-Mapping tab.
+### Profile library
 
-### osu! taiko preset (no camera needed)
+Every profile is a JSON file in `%APPDATA%\TheMover\profiles\`. On first run the built-in
+templates are copied there, so they are ordinary profiles: the coach can rewrite them, the editor
+can change any binding, and **every change is saved automatically** to the active profile (no
+Save button to remember). Coach-built profiles land in the same library and behave the same way.
 
-Each controller is a drumstick. Strike downward for *don* (right hand = J, left hand = F), swing
-outward for *kat* (right = K, left = D). The trigger and Move button are button fallbacks for
-don/kat, Cross = Enter, Circle = Esc, Triangle/Square scroll the song list. The preset uses a
-110 ms gesture cooldown and 35 ms taps; opposite directions of one axis share the cooldown, so the
-accelerate and stop phases of one strike count as exactly one hit. Tune *Gesture sensitivity*
-(lower = lighter strikes) and *Gesture cooldown* in the Mapping tab, or ask the coach.
+- **New from template…** creates a fresh copy of a built-in template (names get a number if taken).
+- **Save as…** stores a copy under a new name and switches to it.
+- **Reset to default** restores the built-in version of a profile that started from a template.
+- **Delete profile** (Advanced) removes it; a deleted template stays gone until you use
+  *New from template* again.
+- Import/Export (Advanced) move profiles as JSON files.
 
-## 4. Devices tab
+### osu! taiko (rhythm games): how hits are detected
 
-- **Sphere colours**: click a sphere in the camera picture to teach the tracker its colour, or pick
-  a colour; the controller LED follows. Defaults are magenta and cyan.
-- **Depth**: stand close → *Set NEAR*, stand back → *Set FAR*.
-- **Re-centre yaw** after pointing both controllers at the screen.
-- **Test rumble + flash** to identify each controller.
-- Auto-calibration learns gyro bias and accelerometer scale whenever a controller rests still for
-  a moment, so no calibration ritual is needed.
+Rhythm games are a special case because timing accuracy and latency decide everything. A typical
+Oni chart runs 170 BPM 1/4 streams (a note every 88 ms, 176 ms per hand when alternating) with the
+colour switching don/kat inside the stream, and at OD 5 a GREAT is only ±35 ms wide. The generic
+gesture path (threshold on a smoothed magnitude, evaluated on the engine tick) is not good enough
+for that, so drum hits use their own pipeline:
+
+1. **Every IMU frame is used.** Each Bluetooth report carries two accelerometer frames (~5.7 ms
+   apart); both are decoded, not just the newest one.
+2. **A reader thread per controller.** While a rhythm profile is active, each controller gets a
+   dedicated thread that blocks on the HID read and processes a report the moment it arrives,
+   instead of waiting for the next engine tick.
+3. **The hit is the stop of the stroke.** An air-drum stroke is an acceleration lobe in the
+   direction of motion, a short cruise, then a sharp spike in the *opposite* direction as the arm
+   stops. That stop is what you feel as the hit and is by far the sharpest feature, so the hit fires
+   on the first frame of the stop lobe. Because the spike is so steep, soft and hard strokes fire at
+   the same phase (jitter is one frame, not "whenever the swing crossed a threshold").
+4. **Don or kat comes from the stroke direction relative to gravity.** Straight down (within 40°)
+   is don, angled outward or sideways is kat, upward strokes (the rebound) never fire. Holding the
+   trigger forces kat and holding Move forces don, for players who prefer a modifier. This works in
+   any grip because gravity is measured, not assumed.
+5. **No double hits, no hijacked strokes.** An onset must last two consecutive frames in a
+   consistent direction, so the single-frame blip of a rebound cannot start a false stroke, and a
+   sustained acceleration in a new direction re-arms the detector so a don→kat switch mid-stream
+   registers with the correct colour. A 45 ms refractory period follows every hit.
+6. **Keys are pressed on the reader thread.** `cN.hit.don/kat/any` bindings in tap mode bypass the
+   mapping tick entirely: the key goes down inside the hit callback and a timer releases it 30 ms
+   later. The rest of the profile (menus, rumble) still runs on the normal engine.
+
+Simulating a full 1448-note Oni chart (1510 strokes including big notes) through the detector gives
+every stroke detected, no extra hits, no wrong colours and a timing error of ±2.9 ms. On real
+hardware the remaining fixed delay is the Bluetooth transport plus half a report (roughly 10 to 25 ms)
+and the jitter is about one report period; run osu!'s **offset wizard** once so the constant part
+is absorbed by the game's offset. The controller cards on the Play tab show the hit count, the last
+hit and the report rate (about 85 Hz per controller over Bluetooth) so you can check a controller
+before a map.
+
+Preset keys: right hand J (don) / K (kat), left hand F (don) / D (kat), Cross = Enter, Circle = Esc,
+Triangle / Square scroll the song list, F2 random, ` quick retry. Rumble thumps on every hit.
+Tune with the coach ("hits register too easily" lowers sensitivity) or, in Advanced, edit the
+bindings directly.
+
+## 4. Setup tab
+
+Simple view: controller status with **Identify** (buzz + flash) and **Swap 1 ↔ 2**, the Claude API
+key, and the camera picture (click a sphere to teach the tracker its colour, or pick a colour; the
+controller LED follows).
+
+Advanced view adds: rescan / forget slot assignment, controller backend, **LED / rumble method**,
+re-centre yaw, model / effort / refusal fallback, recording length and screenshot rate, keyboard
+backend, virtual gamepad on/off, engine rate, camera source / index / mirror and depth calibration
+(*Set NEAR* / *Set FAR*).
+
+Auto-calibration learns gyro bias and accelerometer scale whenever a controller rests still for a
+moment, so no calibration ritual is needed.
+
+### LED and rumble
+
+Output reports are sent exactly like psmoveapi / PSMoveService do (49-byte report 0x02), at most
+every 120 ms (Bluetooth stacks drop faster writes and can even disconnect the controller), with a
+keep-alive every 2 s so the sphere stays lit. Short rumble pulses are latched so they always reach
+the motor. Each controller's write health is shown in Setup ("LED/rumble ok [hid_write]"). If it
+says *NOT working*:
+
+1. Make sure PSMoveService is closed (it overrides colours and rumble).
+2. In `auto` mode The Mover already sends every report through `hid_write` **and** the Windows
+   control pipe (`HidD_SetOutputReport`), on every HID collection the controller exposes, because
+   Bluetooth stacks disagree about which one carries output reports. The status shows per-method
+   success counts, e.g. `hid_write 12/12, control 12/12`.
+3. Advanced → **Copy HID diagnostics** puts the HID collections, paths, write results, report rate,
+   live accelerometer / gyro readings and calibration state on the clipboard; paste that into a bug
+   report. It is also written to `%APPDATA%\TheMover\themover.log`.
+
+### Motion values
+
+Accelerometer, gyro, roll/pitch/yaw are decoded from the report exactly as psmoveapi does (battery
+at byte 12, accelerometer frames at 13 and 19, gyro frames at 25 and 31, magnetometer from 38). The
+accelerometer scale and the gyro bias are learned while the controller rests; the gyro *scale* is
+refined while you turn the controller slowly (the gravity direction must rotate exactly as fast as
+the gyro says), so after a few seconds of handling, values are in real g and degrees per second.
+Advanced → Setup shows the live numbers per controller.
+
+### Updates without rebuilding the .exe
+
+`TheMover.exe` is a launcher: it bundles Python and every dependency plus a copy of the app code,
+and on start it prefers a newer copy of the `themover` package in `%APPDATA%\TheMover\app\` if one
+is there. The **Updates** card in Setup fills that folder straight from GitHub:
+
+- **Check for updates** downloads the branch archive (`codeload.github.com/…/zip/refs/heads/<branch>`,
+  about 200 KB) and reads the commit SHA GitHub stores in the zip comment, so no API token and no
+  rate limit are involved. The app also checks once on start (Advanced → toggle).
+- **Update & restart** unpacks `themover/` into the app folder (atomic swap), writes `version.json`,
+  releases the controllers and relaunches. The next start runs the new code.
+- Before installing, the updater reads the archive's `requirements.txt` and refuses if it needs a
+  package the executable does not contain (that is the one case where a new .exe is required).
+- If downloaded code fails to import, the launcher moves it to `themover.broken` and starts the
+  built-in copy, so a bad push can never brick the app. **Remove downloaded update** (Advanced)
+  goes back to the built-in copy manually.
+- The branch defaults to the one the executable was built from (stamped by CI into `_build.json`);
+  Advanced lets you point it at another branch or repo, and add a token for private repos.
+
+Running from source, the card only reports whether the branch moved; use `git pull` there.
 
 ## 5. Running from source
 
@@ -140,14 +273,14 @@ The GitHub Actions workflow builds `TheMover.exe` on every push and attaches it 
 
 ```
 themover/
-  core/       state, orientation fusion, gesture detection
+  core/       state, orientation fusion, gesture detection, drum-hit detection (rhythm games)
   devices/    PS Move HID protocol, controller discovery + stable slots, PS3 Eye / OpenCV / synthetic camera, sphere tracker
   mapping/    vocabulary, profile schema, built-in templates, engine, runtime loop
   outputs/    Windows SendInput (scan-codes), pynput fallback, ViGEm virtual gamepad
-  ai/         recorder (screen + input), Claude client, analyzer (structured output), chat coach (tool use)
-  ui/         PySide6 app: Play, Mapping, AI Coach, Devices, Settings
+  ai/         recorder (screen + input), Claude client, analyzer (structured analysis + profile), chat coach (tool use), coach log
+  ui/         PySide6 app: Play (checklist), Mapping (plain-English / advanced), AI Coach, Setup; Advanced switch
   profiles/   user profile library
-tests/        69 unit tests (protocol, discovery/slots, tracker, motion, engine, runtime, AI with a fake client, GUI smoke)
+tests/        90 unit tests (protocol + LED writer + reader thread, discovery/slots, tracker, motion, drum hits, engine + fast path, runtime, humanizer, AI + coach log with a fake client, GUI smoke)
 ```
 
 ## 7. Notes and known limits
@@ -160,3 +293,5 @@ tests/        69 unit tests (protocol, discovery/slots, tracker, motion, engine,
   orientation used for tilt-to-move comes from gravity and is exact.
 - Virtual gamepad output requires ViGEmBus; without it gamepad targets are ignored and keyboard/mouse
   targets still work.
+- The LED/rumble control-pipe fallback and the write diagnostics were written against the Windows
+  HID API documentation, not exercised on real hardware in CI; the Setup tab reports what happens.

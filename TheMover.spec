@@ -16,9 +16,11 @@ except Exception:
     datas = []
 datas += collect_data_files("anthropic")
 datas += [("assets/icon.png", "assets")]
+if os.path.exists("themover/_build.json"):  # commit stamp written by CI (used by the in-app updater)
+    datas += [("themover/_build.json", "themover")]
 
 a = Analysis(
-    ["themover/__main__.py"],
+    ["launcher.py"],  # prefers an in-app-updated copy of themover over the bundled one
     pathex=["."],
     binaries=[],
     datas=datas,

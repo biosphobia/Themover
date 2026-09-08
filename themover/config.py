@@ -53,12 +53,13 @@ class Settings:
     )
     controller_backend: str = "auto"  # auto | hid | simulated
     controller_serials: list[str] = field(default_factory=lambda: ["", ""])  # remembered slot assignment
+    led_method: str = "auto"  # auto | write | control  (how LED/rumble reports are sent)
 
     # Engine
     tick_hz: int = 100
     output_backend: str = "auto"  # auto | sendinput | pynput
     gamepad_enabled: bool = True
-    last_profile: str = "generic_gamepad"
+    last_profile: str = "user:generic_gamepad"
 
     # Recording
     record_seconds: int = 45
@@ -67,6 +68,14 @@ class Settings:
 
     # UI
     start_minimized: bool = False
+    advanced_mode: bool = False
+
+    # Updates (straight from GitHub pushes, no rebuild needed)
+    update_owner: str = "biosphobia"
+    update_repo: str = "Themover"
+    update_branch: str = ""  # "" = the branch this build came from
+    check_updates_on_start: bool = True
+    github_token: str = ""  # only needed for private repositories
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -11,18 +11,23 @@ from PySide6.QtWidgets import (
 )
 
 from themover.mapping import vocabulary as V
+from themover.mapping.humanize import describe_binding, describe_feedback
 from themover.mapping.profile import Binding, FeedbackRule, Profile
-from themover.mapping.templates import TEMPLATES, load_template
+from themover.mapping.templates import TEMPLATES
+from themover.profiles import create_from_template, delete_profile, list_profiles, restore_template
 from themover.ui.context import AppContext
 
 
 class BindingDialog(QDialog):
-    def __init__(self, binding: Optional[Binding] = None, parent=None) -> None:
+    ADVANCED_ROWS = ("Button threshold", "Compare", "Axis input range", "Deadzone", "Scale", "Invert", "Curve", "Smoothing", "Tap length (ms)", "Repeat every (ms)", "Enabled")
+
+    def __init__(self, binding: Optional[Binding] = None, parent=None, advanced: bool = True) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit binding")
         self.setMinimumWidth(460)
         b = binding or Binding("c0.button.move", "key.space")
         form = QFormLayout(self)
+        self.form = form
         self.source = QComboBox(); self.source.setEditable(True); self.source.addItems(V.all_sources()); self.source.setCurrentText(b.source)
         self.target = QComboBox(); self.target.setEditable(True); self.target.addItems(V.all_targets()); self.target.setCurrentText(b.target)
         self.mode = QComboBox(); self.mode.addItems(V.MODES); self.mode.setCurrentText(b.mode)
@@ -55,10 +60,34 @@ class BindingDialog(QDialog):
         form.addRow("Repeat every (ms)", self.repeat_ms)
         form.addRow("Comment", self.comment)
         form.addRow("Enabled", self.enabled)
+        self.preview = QLabel("")
+        self.preview.setObjectName("muted")
+        self.preview.setWordWrap(True)
+        form.addRow("In plain words", self.preview)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        self.source.currentTextChanged.connect(self._update_preview)
+        self.target.currentTextChanged.connect(self._update_preview)
+        self.mode.currentTextChanged.connect(self._update_preview)
+        self._update_preview()
+        self.set_advanced(advanced)
+
+    def set_advanced(self, on: bool) -> None:
+        for row in range(self.form.rowCount()):
+            item = self.form.itemAt(row, QFormLayout.LabelRole)
+            label = item.widget().text() if item is not None and item.widget() is not None else ""
+            if label in self.ADVANCED_ROWS:
+                self.form.setRowVisible(row, on)
+        self.adjustSize()
+
+    def _update_preview(self) -> None:
+        try:
+            what, game, how = describe_binding(self.value())
+            self.preview.setText(f"{what}  →  {game}  ({how})")
+        except Exception:
+            self.preview.setText("")
 
     def _accept(self) -> None:
         b = self.value()
@@ -122,7 +151,8 @@ class FeedbackDialog(QDialog):
 
 
 class MappingTab(QWidget):
-    COLS = ("on", "source", "mode", "target", "options", "comment")
+    COLS = ("on", "what you do", "the game gets", "how", "source", "target", "options", "comment")
+    ADVANCED_COLS = (0, 4, 5, 6)
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -134,79 +164,113 @@ class MappingTab(QWidget):
         self.game_edit = QLineEdit()
         self.game_edit.setPlaceholderText("Game")
         top.addWidget(QLabel("Name")); top.addWidget(self.name_edit, 2)
-        top.addWidget(QLabel("Game")); top.addWidget(self.game_edit, 2)
+        self.game_label = QLabel("Game")
+        top.addWidget(self.game_label); top.addWidget(self.game_edit, 2)
         self.sens = QDoubleSpinBox(); self.sens.setRange(0.2, 3.0); self.sens.setSingleStep(0.1); self.sens.setToolTip("Gesture sensitivity: lower = gestures trigger more easily")
-        top.addWidget(QLabel("Gesture sensitivity")); top.addWidget(self.sens)
+        self.sens_label = QLabel("Gesture sensitivity")
+        top.addWidget(self.sens_label); top.addWidget(self.sens)
         self.cooldown = QSpinBox(); self.cooldown.setRange(30, 2000); self.cooldown.setSuffix(" ms"); self.cooldown.setToolTip("Minimum time between two of the same gesture (80-100 for drumming)")
-        top.addWidget(QLabel("Gesture cooldown")); top.addWidget(self.cooldown)
+        self.cooldown_label = QLabel("Gesture cooldown")
+        top.addWidget(self.cooldown_label); top.addWidget(self.cooldown)
         root.addLayout(top)
 
         tools = QHBoxLayout()
         self.template_combo = QComboBox()
+        self.template_combo.addItem("New from template…", "")
         for key in TEMPLATES:
             self.template_combo.addItem(TEMPLATES[key]["name"], key)
         self.load_template_btn = QPushButton("Load template")
-        self.add_btn = QPushButton("+ Binding")
+        self.load_template_btn.setVisible(False)
+        self.add_btn = QPushButton("+ Add")
         self.edit_btn = QPushButton("Edit")
         self.dup_btn = QPushButton("Duplicate")
         self.del_btn = QPushButton("Remove")
-        self.save_btn = QPushButton("Save profile")
-        self.save_btn.setObjectName("accent2")
+        self.save_btn = QPushButton("Save as…")
+        self.reset_btn = QPushButton("Reset to default")
+        self.delete_profile_btn = QPushButton("Delete profile")
         self.export_btn = QPushButton("Export…")
         self.import_btn = QPushButton("Import…")
         for w in (self.template_combo, self.load_template_btn, self.add_btn, self.edit_btn, self.dup_btn, self.del_btn):
             tools.addWidget(w)
         tools.addStretch(1)
-        for w in (self.import_btn, self.export_btn, self.save_btn):
+        for w in (self.import_btn, self.export_btn, self.reset_btn, self.delete_profile_btn, self.save_btn):
             tools.addWidget(w)
         root.addLayout(tools)
+        self.autosave_lbl = QLabel("Changes are saved automatically.")
+        self.autosave_lbl.setObjectName("muted")
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels([c.title() for c in self.COLS])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         root.addWidget(self.table, 3)
 
+        self.fb_widget = QWidget()
+        fbl = QVBoxLayout(self.fb_widget); fbl.setContentsMargins(0, 0, 0, 0)
         fb_head = QHBoxLayout()
         fb_title = QLabel("Rumble & LED feedback")
         fb_title.setObjectName("h2")
         self.fb_add = QPushButton("+ Rule"); self.fb_edit = QPushButton("Edit"); self.fb_del = QPushButton("Remove")
         fb_head.addWidget(fb_title); fb_head.addStretch(1); fb_head.addWidget(self.fb_add); fb_head.addWidget(self.fb_edit); fb_head.addWidget(self.fb_del)
-        root.addLayout(fb_head)
-        self.fb_table = QTableWidget(0, 4)
-        self.fb_table.setHorizontalHeaderLabels(["Controller", "Trigger", "Effect", "Comment"])
+        fbl.addLayout(fb_head)
+        self.fb_table = QTableWidget(0, 5)
+        self.fb_table.setHorizontalHeaderLabels(["In plain words", "Controller", "Trigger", "Effect", "Comment"])
         self.fb_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.fb_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.fb_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.fb_table.verticalHeader().setVisible(False)
-        root.addWidget(self.fb_table, 1)
+        fbl.addWidget(self.fb_table, 1)
+        root.addWidget(self.fb_widget, 1)
 
         self.load_template_btn.clicked.connect(self._load_template)
+        self.template_combo.activated.connect(self._template_picked)
         self.add_btn.clicked.connect(self._add)
         self.edit_btn.clicked.connect(self._edit)
         self.table.doubleClicked.connect(self._edit)
         self.dup_btn.clicked.connect(self._duplicate)
         self.del_btn.clicked.connect(self._delete)
         self.save_btn.clicked.connect(self._save)
+        self.reset_btn.clicked.connect(self._reset)
+        self.delete_profile_btn.clicked.connect(self._delete_profile)
         self.export_btn.clicked.connect(self._export)
         self.import_btn.clicked.connect(self._import)
         self.fb_add.clicked.connect(self._fb_add)
         self.fb_edit.clicked.connect(self._fb_edit)
         self.fb_table.doubleClicked.connect(self._fb_edit)
         self.fb_del.clicked.connect(self._fb_delete)
+        self.coach_hint = QLabel("Every change is saved to this profile automatically. Easiest way to change things: tell the AI Coach (“make jump a flick up”).")
+        self.coach_hint.setObjectName("muted"); self.coach_hint.setWordWrap(True)
+        root.addWidget(self.coach_hint)
+        ctx.advanced_changed.connect(self.set_advanced)
         self.name_edit.editingFinished.connect(self._meta_changed)
         self.game_edit.editingFinished.connect(self._meta_changed)
         self.sens.valueChanged.connect(self._meta_changed)
         self.cooldown.valueChanged.connect(self._meta_changed)
         ctx.profile_changed.connect(self._on_profile_changed)
         self.populate(ctx.profile)
+        self.set_advanced(ctx.advanced)
+
+    def set_advanced(self, on: bool) -> None:
+        for col in self.ADVANCED_COLS:
+            self.table.setColumnHidden(col, not on)
+        for col in (1, 2, 3):
+            self.fb_table.setColumnHidden(col, not on)
+        self.fb_widget.setVisible(on)
+        for w in (self.sens, self.cooldown, self.import_btn, self.export_btn, self.dup_btn, self.game_edit, self.delete_profile_btn):
+            w.setVisible(on)
+        self.sens_label.setVisible(on)
+        self.cooldown_label.setVisible(on)
+        self.game_label.setVisible(on)
+        self.coach_hint.setVisible(not on)
 
     # ------------------------------------------------------------- render
     def _on_profile_changed(self, profile, reason: str) -> None:
         self.populate(profile)
+        self.reset_btn.setVisible(bool(profile.based_on and profile.based_on in TEMPLATES))
 
     def populate(self, profile: Profile) -> None:
         for w in (self.name_edit, self.game_edit, self.sens, self.cooldown):
@@ -220,7 +284,8 @@ class MappingTab(QWidget):
         self.table.setRowCount(len(profile.bindings))
         for r, b in enumerate(profile.bindings):
             opts = b.describe().split("(", 1)[1].rstrip(")") if "(" in b.describe() else ""
-            for c, text in enumerate(["✓" if b.enabled else "–", b.source, b.effective_mode(), b.target, opts, b.comment]):
+            what, game, how = describe_binding(b)
+            for c, text in enumerate(["✓" if b.enabled else "–", what, game, how, b.source, b.target, opts, b.comment]):
                 item = QTableWidgetItem(text)
                 if c == 0:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -233,7 +298,7 @@ class MappingTab(QWidget):
                 eff.append(f"rumble {f.rumble:g}" + ("" if f.rumble_from else f" for {f.duration_ms}ms"))
             if f.led:
                 eff.append(f"LED {f.led} for {f.led_duration_ms}ms")
-            for c, text in enumerate([f"P{f.controller + 1}", trig, ", ".join(eff), f.comment]):
+            for c, text in enumerate([describe_feedback(f), f"P{f.controller + 1}", trig, ", ".join(eff), f.comment]):
                 self.fb_table.setItem(r, c, QTableWidgetItem(text))
 
     def _current_row(self) -> int:
@@ -252,13 +317,53 @@ class MappingTab(QWidget):
         p.gesture_cooldown_ms = self.cooldown.value()
         self._commit(p)
 
+    def _template_picked(self, index: int) -> None:
+        if self.template_combo.itemData(index):
+            self._load_template()
+            self.template_combo.setCurrentIndex(0)
+
     def _load_template(self) -> None:
+        """Create a new library profile from the chosen template and switch to it."""
         key = self.template_combo.currentData()
-        self.ctx.profile_key = key
-        self._commit(load_template(key))
+        if not key:
+            return
+        new_key, profile = create_from_template(key)
+        self.ctx.profile_key = new_key
+        self.ctx.settings.last_profile = new_key
+        self.ctx.apply_profile(profile, reason="created")
+
+    def _reset(self) -> None:
+        p = self.ctx.profile
+        if not p.based_on or p.based_on not in TEMPLATES:
+            return
+        if QMessageBox.question(self, "Reset to default", f"Replace “{p.name}” with the built-in “{TEMPLATES[p.based_on]['name']}” template?") != QMessageBox.Yes:
+            return
+        from themover.mapping.templates import load_template
+
+        fresh = load_template(p.based_on)
+        fresh.based_on = p.based_on
+        fresh.name = p.name if p.name else fresh.name
+        self._commit(fresh)
+
+    def _delete_profile(self) -> None:
+        key = self.ctx.profile_key
+        if not key:
+            return
+        if QMessageBox.question(self, "Delete profile", f"Delete “{self.ctx.profile.name}”? This cannot be undone.") != QMessageBox.Yes:
+            return
+        delete_profile(key)
+        remaining = list_profiles()
+        if not remaining:
+            from themover.profiles import seed_templates
+
+            seed_templates(force=True)
+            remaining = list_profiles()
+        next_key = next(iter(remaining))
+        self.ctx.load_profile_key(next_key)
+        self.ctx.profile_changed.emit(self.ctx.profile, "deleted")
 
     def _add(self) -> None:
-        dlg = BindingDialog(parent=self)
+        dlg = BindingDialog(parent=self, advanced=self.ctx.advanced)
         if dlg.exec() == QDialog.Accepted:
             p = self.ctx.profile.copy()
             p.bindings.append(dlg.value())
@@ -268,7 +373,7 @@ class MappingTab(QWidget):
         row = self._current_row()
         if row < 0:
             return
-        dlg = BindingDialog(self.ctx.profile.bindings[row], parent=self)
+        dlg = BindingDialog(self.ctx.profile.bindings[row], parent=self, advanced=self.ctx.advanced)
         if dlg.exec() == QDialog.Accepted:
             p = self.ctx.profile.copy()
             p.bindings[row] = dlg.value()
@@ -292,13 +397,9 @@ class MappingTab(QWidget):
         self._commit(p)
 
     def _save(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save profile", "Profile name:", text=self.ctx.profile.name)
+        name, ok = QInputDialog.getText(self, "Save as", "Name for the copy:", text=self.ctx.profile.name + " copy")
         if ok and name.strip():
-            p = self.ctx.profile.copy()
-            p.name = name.strip()
-            self.ctx.profile = p
-            self.ctx.save_current(name.strip())
-            self.ctx.profile_changed.emit(p, "saved")
+            self.ctx.save_as(name.strip())
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export profile", f"{self.ctx.profile.name}.json", "JSON (*.json)")
@@ -309,9 +410,12 @@ class MappingTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Import profile", "", "JSON (*.json)")
         if path:
             try:
-                self._commit(Profile.load(path))
+                imported = Profile.load(path)
             except Exception as exc:
                 QMessageBox.warning(self, "Import failed", str(exc))
+                return
+            self.ctx.profile_key = ""  # imported profiles become a new library entry
+            self.ctx.apply_profile(imported, reason="created")
 
     def _fb_row(self) -> int:
         rows = self.fb_table.selectionModel().selectedRows()

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from themover.ai.analyzer import GameAnalyzer
 from themover.ai.chat import CoachChat
 from themover.ai.client import ClaudeClient
+from themover.ai.coachlog import CoachLog
 from themover.ai.recorder import Recording, SessionRecorder
 from themover.config import app_data_dir
 from themover.ui.context import AppContext
@@ -46,7 +47,8 @@ class _Host:
         self.ctx.buzz(controller, rumble, led, duration_ms)
 
     def save_profile(self, name: str) -> str:
-        return "Saved to " + self.ctx.save_current(name)
+        key = self.ctx.save_as(name)
+        return f"Saved a copy as “{self.ctx.profile.name}” ({key}); it is now the active profile."
 
 
 class AITab(QWidget):
@@ -69,32 +71,28 @@ class AITab(QWidget):
         # ------------------------------------------------ recording panel
         rec = QFrame(); rec.setObjectName("card")
         rl = QVBoxLayout(rec)
-        title = QLabel("1. Record how you play (keyboard/mouse), 2. let Claude design motion controls")
-        title.setObjectName("h2")
+        title = QLabel("Record yourself playing with keyboard / mouse, then let the coach build motion controls for that game")
+        title.setObjectName("h2"); title.setWordWrap(True)
         rl.addWidget(title)
-        how = QLabel("Start your game, click Record, then play normally for the countdown. The Mover captures screenshots and your "
-                     "keyboard/mouse activity, sends them to Claude and gets back a motion mapping tailored to the game.")
-        how.setObjectName("muted"); how.setWordWrap(True)
-        rl.addWidget(how)
         row = QHBoxLayout()
-        self.game_edit = QLineEdit(); self.game_edit.setPlaceholderText("Game name (optional but helps)")
-        self.notes_edit = QLineEdit(); self.notes_edit.setPlaceholderText("Notes for Claude, e.g. 'I want to swing for attacks and drive with a wheel'")
+        self.game_edit = QLineEdit(); self.game_edit.setPlaceholderText("Game name")
+        self.notes_edit = QLineEdit(); self.notes_edit.setPlaceholderText("Wishes (optional), e.g. 'swing to attack'")
         self.seconds = QSpinBox(); self.seconds.setRange(10, 300); self.seconds.setValue(ctx.settings.record_seconds); self.seconds.setSuffix(" s")
         self.record_btn = QPushButton("●  Record"); self.record_btn.setObjectName("danger")
-        self.analyze_btn = QPushButton("✨  Analyze && build mapping"); self.analyze_btn.setObjectName("accent2"); self.analyze_btn.setEnabled(False)
+        self.analyze_btn = QPushButton("✨  Build controls"); self.analyze_btn.setObjectName("accent2"); self.analyze_btn.setEnabled(False)
         row.addWidget(self.game_edit, 2); row.addWidget(self.notes_edit, 3); row.addWidget(self.seconds); row.addWidget(self.record_btn); row.addWidget(self.analyze_btn)
         rl.addLayout(row)
         self.progress = QProgressBar(); self.progress.setRange(0, 1000); self.progress.setValue(0)
         rl.addWidget(self.progress)
-        self.rec_status = QLabel("No recording yet."); self.rec_status.setObjectName("muted"); self.rec_status.setWordWrap(True)
+        self.rec_status = QLabel("Start your game, press Record, play normally until the bar fills."); self.rec_status.setObjectName("muted"); self.rec_status.setWordWrap(True)
         rl.addWidget(self.rec_status)
         splitter.addWidget(rec)
 
         # ---------------------------------------------------- chat panel
         chat = QFrame(); chat.setObjectName("card")
         cl = QVBoxLayout(chat)
-        ct = QLabel("3. Chat to adjust anything  —  e.g. “steering is too twitchy”, “make jump a flick up”, “buzz the left controller”")
-        ct.setObjectName("h2")
+        ct = QLabel("Chat to adjust anything  —  “steering is too twitchy”, “make jump a flick up”")
+        ct.setObjectName("h2"); ct.setWordWrap(True)
         cl.addWidget(ct)
         self.history = QTextBrowser(); self.history.setOpenExternalLinks(True)
         cl.addWidget(self.history, 1)
@@ -114,12 +112,20 @@ class AITab(QWidget):
         self.clear_btn.clicked.connect(self._new_chat)
         self.rec_progress.connect(self._on_rec_progress)
         self.rec_done.connect(self._on_rec_done)
-        self._append_system("Hi! I'm your motion-control coach. Record a session and I'll design a mapping, or just tell me what to change in the current profile.")
+        ctx.advanced_changed.connect(self.set_advanced)
+        self.set_advanced(ctx.advanced)
+        self.coach_log = CoachLog()
+        self._recording_folder = ""
+        self._append_system("Hi! Record a session and I'll design controls for that game, or tell me what to change in the current profile.")
+
+    def set_advanced(self, on: bool) -> None:
+        self.seconds.setVisible(on)
+        self.clear_btn.setVisible(on)
 
     # ------------------------------------------------------------ helpers
     def _client_or_warn(self) -> Optional[ClaudeClient]:
         if not self.ctx.settings.effective_api_key:
-            QMessageBox.information(self, "API key needed", "Paste your Anthropic API key in the Settings tab first.")
+            QMessageBox.information(self, "API key needed", "Paste your Anthropic API key in the Setup tab first.")
             return None
         if self._client is None:
             self._client = ClaudeClient(self.ctx.settings)
@@ -174,6 +180,7 @@ class AITab(QWidget):
         try:
             folder = app_data_dir() / "recordings" / time.strftime("%Y%m%d-%H%M%S")
             recording.save(folder)
+            self._recording_folder = str(folder)
         except Exception as exc:
             log.warning("could not save recording: %s", exc)
 
@@ -187,14 +194,16 @@ class AITab(QWidget):
         self.recording.game_hint = self.game_edit.text().strip()
         self.recording.notes = self.notes_edit.text().strip()
         self._set_busy(True)
-        self._append("You", f"Analyze my recording{(' of ' + self.recording.game_hint) if self.recording.game_hint else ''} and build a mapping.", "#ff3fb4")
-        self.rec_status.setText("Claude is studying your game… (this can take a minute)")
+        self._append("You", f"Build controls for {self.recording.game_hint or 'my recording'}.", "#ff3fb4")
+        self.rec_status.setText("The coach is studying your game… (this can take a minute)")
         current = self.ctx.profile if self.ctx.profile.bindings else None
         rec = self.recording
         max_frames = self.ctx.settings.max_frames_to_send
+        folder = self._recording_folder
+        clog = self.coach_log
 
         def job(signals):
-            return GameAnalyzer(client).analyze(rec, max_frames=max_frames, current_profile=current)
+            return GameAnalyzer(client, coach_log=clog).analyze(rec, max_frames=max_frames, current_profile=current, recording_folder=folder)
 
         w = Worker(job)
         w.signals.finished.connect(self._on_analysis)
@@ -204,19 +213,21 @@ class AITab(QWidget):
     def _on_analysis(self, result) -> None:
         self._set_busy(False)
         p = result.profile
-        self.ctx.profile_key = ""
+        self.ctx.profile_key = ""  # a fresh analysis always becomes its own library profile
         self.ctx.apply_profile(p, reason="analysis")
-        try:
-            path = self.ctx.save_current(p.name)
-        except Exception as exc:
-            path = f"(not saved: {exc})"
-        msg = f"Built the profile “{p.name}” with {len(p.bindings)} bindings and {len(p.feedback)} feedback rules. It is active now and saved to {Path(path).name if path else ''}.\n\nHow to play: {p.play_style}"
-        if p.notes:
-            msg += f"\n\nDesign notes: {p.notes}"
-        if result.problems:
-            msg += "\n\n(Some entries were dropped: " + "; ".join(result.problems) + ")"
+        msg = f"“{p.name}” is ready, active and saved to your profiles ({len(p.bindings)} controls).\n\nHow to play: {p.play_style}"
+        analysis = result.analysis_text()
+        if analysis:
+            msg += "\n\n" + analysis
+        if self.ctx.advanced:
+            if p.notes:
+                msg += f"\n\nDesign notes: {p.notes}"
+            if result.problems:
+                msg += "\n\n(Some entries were dropped: " + "; ".join(result.problems) + ")"
+            if result.usage:
+                msg += f"\n\n[{result.model}: {result.usage.get('input_tokens', 0)} in / {result.usage.get('output_tokens', 0)} out tokens, {result.seconds:.0f} s; report: {result.report_path}]"
         self._append_system(msg)
-        self.rec_status.setText(f"Mapping ready: {p.name}. Press Play on the Play tab, or chat below to adjust.")
+        self.rec_status.setText(f"Ready: {p.name}. Go to Play, or chat below to adjust.")
 
     def _on_error(self, text: str) -> None:
         self._set_busy(False)
@@ -237,7 +248,7 @@ class AITab(QWidget):
         if client is None:
             return
         if self.chat is None:
-            self.chat = CoachChat(client, _Host(self.ctx))
+            self.chat = CoachChat(client, _Host(self.ctx), coach_log=self.coach_log)
         self.input.clear()
         self._append("You", text, "#ff3fb4")
         self._set_busy(True)

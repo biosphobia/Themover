@@ -19,7 +19,7 @@ def test_main_window_starts_and_arms(qapp):
     from themover.config import Settings, save_settings
     from themover.ui.main_window import MainWindow
 
-    s = Settings(camera_backend="synthetic", controller_backend="simulated")
+    s = Settings(camera_backend="synthetic", controller_backend="simulated", check_updates_on_start=False)
     save_settings(s)
     w = MainWindow(s)
     try:
@@ -28,15 +28,40 @@ def test_main_window_starts_and_arms(qapp):
         assert w.ctx.profile.bindings
         w.play_tab.play_btn.setChecked(True)
         assert w.ctx.armed
-        for i in range(5):
+        for i in range(4):
             w.tabs.setCurrentIndex(i)
             qapp.processEvents()
         w.tabs.setCurrentIndex(0)
-        w.play_tab.refresh()
-        w.devices_tab.refresh()
+        for _ in range(10):
+            w.play_tab.refresh()
+        assert w.play_tab.checklist._labels and w.play_tab.checklist._labels[0].isVisibleTo(w.play_tab)
+        w.setup_tab.refresh()
+        assert w.play_tab.how_to_play.program[0] and w.play_tab.how_to_play.grab().width() > 0
         w.mapping_tab.template_combo.setCurrentIndex(2)
         w.mapping_tab._load_template()
         assert w.mapping_tab.table.rowCount() == len(w.ctx.profile.bindings)
+        assert w.ctx.profile_key.startswith("user:") and w.ctx.profile.based_on
+        # Edits autosave to the active profile file.
+        from themover.profiles import load_profile
+        p = w.ctx.profile.copy()
+        p.bindings.pop()
+        w.ctx.apply_profile(p, reason="edited")
+        assert len(load_profile(w.ctx.profile_key).bindings) == len(p.bindings)
+        # Save as makes a separate copy and switches to it.
+        old_key = w.ctx.profile_key
+        new_key = w.ctx.save_as("Smoke copy")
+        assert new_key != old_key and load_profile(new_key).name == "Smoke copy" and load_profile(old_key).name != "Smoke copy"
+        # Simple mode hides raw columns; advanced shows them.
+        assert w.mapping_tab.table.isColumnHidden(4) and not w.mapping_tab.table.isColumnHidden(1)
+        assert not w.play_tab.cards[0].gauges["roll"].isVisibleTo(w.play_tab)
+        w.advanced_toggle.setChecked(True)
+        qapp.processEvents()
+        assert w.ctx.settings.advanced_mode and not w.mapping_tab.table.isColumnHidden(4)
+        assert w.play_tab.cards[0].gauges["roll"].isVisibleTo(w.play_tab)
+        assert w.setup_tab.backend.isVisibleTo(w.setup_tab)
+        w.advanced_toggle.setChecked(False)
+        qapp.processEvents()
+        assert not w.setup_tab.backend.isVisibleTo(w.setup_tab)
         w.ctx.set_armed(False)
         assert not w.ctx.armed
     finally:
@@ -52,6 +77,9 @@ def test_binding_dialog_roundtrip(qapp):
     b = Binding("c1.orient.roll", "gamepad.left_stick_x", mode="axis", input_range=[-30, 30], deadzone=0.2, comment="hi")
     dlg = BindingDialog(b)
     assert dlg.value().to_dict() == b.to_dict()
+    assert "Tilt left hand sideways" in dlg.preview.text()
+    simple = BindingDialog(b, advanced=False)
+    assert simple.value().to_dict() == b.to_dict()  # hidden rows keep their values
     f = FeedbackRule(when="c0.trigger", controller=1, rumble=0.7, led=[1, 2, 3], comment="c")
     fd = FeedbackDialog(f)
     assert fd.value().to_dict() == f.to_dict()
@@ -64,7 +92,7 @@ def test_ai_tab_recording_signals_and_chat_host(qapp):
     from themover.ui.ai_tab import AITab, _Host
     from themover.ui.context import AppContext
 
-    ctx = AppContext(Settings(camera_backend="synthetic", controller_backend="simulated"))
+    ctx = AppContext(Settings(camera_backend="synthetic", controller_backend="simulated", check_updates_on_start=False))
     tab = AITab(ctx)
     try:
         tab.rec_progress.emit(5.0, 10.0)
@@ -73,9 +101,15 @@ def test_ai_tab_recording_signals_and_chat_host(qapp):
         tab.rec_done.emit(Recording(duration=3.0))
         qapp.processEvents()
         assert tab.analyze_btn.isEnabled() and tab.recording is not None
+        ctx.load_profile_key("user:boxing")
         host = _Host(ctx)
-        host.apply_profile(load_template("boxing"))
-        assert ctx.profile.name == "Boxing" and host.get_profile().name == "Boxing"
+        edited = load_template("boxing")
+        edited.name = "Boxing tuned"
+        host.apply_profile(edited)
+        assert ctx.profile.name == "Boxing tuned" and host.get_profile().name == "Boxing tuned"
+        from themover.profiles import load_profile
+        assert load_profile("user:boxing").name == "Boxing tuned"  # coach edits persist to the built-in profile
+        assert "copy" in host.save_profile("Boxing experiment").lower() and ctx.profile_key == "user:boxing_experiment"
         host.buzz(0, 0.5, (9, 9, 9), 100)
         assert ctx.runtime._overrides[0][2] == (9, 9, 9)
     finally:

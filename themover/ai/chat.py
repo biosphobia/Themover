@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Callable, Optional, Protocol
 
 from themover.ai.client import ClaudeClient, content_to_dicts, text_of
+from themover.ai.coachlog import CoachLog, _thinking_text
 from themover.ai.prompts import CHAT_INSTRUCTIONS, system_prompt
 from themover.mapping.profile import Binding, FeedbackRule, Profile
 
@@ -38,7 +40,7 @@ _FEEDBACK_PROPS = {
 }
 
 TOOLS: list[dict[str, Any]] = [
-    {"name": "get_profile", "description": "Return the currently active mapping profile as JSON, with binding indices.",
+    {"name": "get_profile", "description": "Return the currently active mapping profile as JSON, with binding indices (every profile, built-in or custom, is editable; edits are saved automatically).",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "read_live_signals", "description": "Read the live values of the controller signals right now (orientation, tracking, trigger, pressed buttons, wheel angle). Useful to check calibration or whether a gesture registers.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
@@ -56,19 +58,20 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": {"type": "object", "properties": {"profile": {"type": "object"}}, "required": ["profile"], "additionalProperties": False}},
     {"name": "buzz_controller", "description": "Pulse rumble and/or flash the sphere of a controller so the player can identify it or feel a setting.",
      "input_schema": {"type": "object", "properties": {"controller": {"type": "integer"}, "rumble": {"type": "number"}, "led": {"type": "array", "items": {"type": "integer"}}, "duration_ms": {"type": "integer"}}, "required": ["controller"], "additionalProperties": False}},
-    {"name": "save_profile", "description": "Save the active profile to the player's profile library under a name.",
+    {"name": "save_profile", "description": "Edits are already saved automatically to the active profile. Use this only to store a COPY of the active profile under a new name (e.g. before a big experiment).",
      "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}},
 ]
 
 
 class CoachChat:
-    def __init__(self, client: ClaudeClient, host: ProfileHost, max_tool_rounds: int = 8) -> None:
+    def __init__(self, client: ClaudeClient, host: ProfileHost, max_tool_rounds: int = 8, coach_log: Optional[CoachLog] = None) -> None:
         self.client = client
         self.host = host
         self.messages: list[dict[str, Any]] = []
         self.max_tool_rounds = max_tool_rounds
         self.on_tool: Optional[Callable[[str, dict[str, Any], str], None]] = None
         self.last_usage: Optional[dict[str, Any]] = None
+        self.coach_log = coach_log
 
     def reset(self) -> None:
         self.messages = []
@@ -78,10 +81,23 @@ class CoachChat:
         system = system_prompt() + "\n" + CHAT_INSTRUCTIONS
         self.messages.append({"role": "user", "content": user_text})
         final_text = ""
+        t0 = time.monotonic()
+        tool_log: list[dict[str, Any]] = []
+        thinking_parts: list[str] = []
+        model = ""
         for _round in range(self.max_tool_rounds + 1):
-            message = self.client.stream_message(system, self.messages, max_tokens=8000, tools=TOOLS, on_text=on_text)
+            try:
+                message = self.client.stream_message(system, self.messages, max_tokens=8000, tools=TOOLS, on_text=on_text)
+            except Exception as exc:
+                if self.coach_log:
+                    self.coach_log.log_error("chat", str(exc), user=user_text)
+                raise
             usage = getattr(message, "usage", None)
             self.last_usage = usage.model_dump() if hasattr(usage, "model_dump") else None
+            model = getattr(message, "model", "") or model
+            thought = _thinking_text(message)
+            if thought:
+                thinking_parts.append(thought)
             self.messages.append({"role": "assistant", "content": content_to_dicts(message.content)})
             final_text += text_of(message)
             if message.stop_reason == "refusal":
@@ -100,12 +116,23 @@ class CoachChat:
                     log.exception("tool %s failed", tu.name)
                     results.append({"type": "tool_result", "tool_use_id": tu.id, "content": f"Error: {exc}", "is_error": True})
                     out = f"Error: {exc}"
+                tool_log.append({"name": tu.name, "input": tool_input, "result": out[:400]})
                 if self.on_tool:
                     try:
                         self.on_tool(tu.name, tool_input, out)
                     except Exception:
                         pass
             self.messages.append({"role": "user", "content": results})
+        if self.coach_log:
+            try:
+                profile = self.host.get_profile()
+                self.coach_log.log_chat(
+                    game=profile.game, profile_name=profile.name, user_text=user_text, reply=final_text.strip(),
+                    tool_calls=tool_log, thinking="\n\n".join(thinking_parts), model=model, usage=self.last_usage,
+                    seconds=time.monotonic() - t0,
+                )
+            except Exception as exc:  # logging must never break the chat
+                log.warning("coach log failed: %s", exc)
         return final_text.strip()
 
     # --------------------------------------------------------------- tools

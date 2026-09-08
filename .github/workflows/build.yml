@@ -30,6 +30,14 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
+      - name: Stamp build info (commit, branch, date) for the in-app updater
+        shell: python
+        run: |
+          import json, os, datetime
+          info = {"sha": os.environ["GITHUB_SHA"], "branch": os.environ["GITHUB_REF_NAME"],
+                  "date": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+          json.dump(info, open("themover/_build.json", "w"))
+          print(info)
       - run: pyinstaller --noconfirm TheMover.spec
       - uses: actions/upload-artifact@v4
         with:

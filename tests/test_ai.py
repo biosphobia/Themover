@@ -104,8 +104,9 @@ def test_analyzer_uses_structured_output_and_fallbacks():
     result = GameAnalyzer(cc).analyze(recording(), max_frames=4)
     assert result.profile.name == "Driving wheel" and result.problems == []
     kw = client.calls[0]
-    assert kw["model"] == "claude-opus-5" and kw["thinking"] == {"type": "adaptive"}
+    assert kw["model"] == "claude-opus-5" and kw["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert kw["output_config"]["format"]["type"] == "json_schema"
+    assert set(kw["output_config"]["format"]["schema"]["properties"]) == {"analysis", "profile"}
     assert kw["betas"] == ["server-side-fallback-2026-07-01"] and kw["fallbacks"] == "default"
     assert kw["system"][0]["cache_control"] == {"type": "ephemeral"}
     content = kw["messages"][0]["content"]
@@ -234,3 +235,47 @@ def test_system_prompt_mentions_vocabulary_and_examples():
 def test_client_requires_key():
     with pytest.raises(RuntimeError):
         ClaudeClient(Settings(api_key="")).client
+
+
+def test_analysis_and_chat_are_logged(tmp_path):
+    from themover.ai.coachlog import CoachLog
+
+    clog = CoachLog(tmp_path / "logs")
+    prof = load_template("fps_pointer").to_dict()
+    analysis = {"game": "Test Shooter", "genre": "FPS", "perspective": "first person", "inputs": ["w: walk"],
+                "metaphor": "hold the right controller like a gun", "camera_used": False, "camera_reason": "gyro aim is enough",
+                "unused_features": "no camera", "playability": "tilt to move keeps arms low"}
+    thinking = Block(type="thinking", thinking="The mouse moves 80% of the time, so this is an aim game.", signature="x")
+    client = FakeClient([msg([thinking, Block(type="text", text=json.dumps({"analysis": analysis, "profile": prof}))])])
+    result = GameAnalyzer(ClaudeClient(Settings(api_key="k"), client=client), coach_log=clog).analyze(recording(), recording_folder="/rec/1")
+    assert result.analysis["game"] == "Test Shooter" and result.profile.name == "FPS pointer"
+    assert "aim game" in result.thinking and "Camera: not needed" in result.analysis_text()
+    assert result.report_path.endswith(".md") and (tmp_path / "logs" / "coach_log.jsonl").exists()
+    report = open(result.report_path, encoding="utf-8").read()
+    assert "hold the right controller like a gun" in report and "aim game" in report and "Test Racer" in report
+
+    # A chat turn about the same game is logged and becomes a lesson for the next analysis.
+    tool_turn = msg([Block(type="tool_use", id="t1", name="modify_binding", input={"index": 0, "changes": {"scale": 0.5}})], stop="tool_use")
+    final = msg([Block(type="text", text="Aim is slower now.")])
+    host = Host()
+    host.profile.game = "Test Racer"
+    chat = CoachChat(ClaudeClient(Settings(api_key="k"), client=FakeClient([tool_turn, final])), host, coach_log=clog)
+    chat.send("aim is too fast")
+    entries = clog.entries()
+    assert [e["kind"] for e in entries] == ["analysis", "chat"]
+    assert entries[1]["tools"][0]["name"] == "modify_binding" and entries[1]["reply"] == "Aim is slower now."
+    lessons = clog.lessons_for("test racer")
+    assert "aim is too fast" in lessons and "modify_binding" in lessons
+    assert clog.lessons_for("unknown game") == ""
+
+    # Lessons are injected into the next analysis of that game.
+    client2 = FakeClient([msg([Block(type="text", text=json.dumps({"analysis": analysis, "profile": prof}))])])
+    GameAnalyzer(ClaudeClient(Settings(api_key="k"), client=client2), coach_log=clog).analyze(recording())
+    assert "PAST FEEDBACK" in client2.calls[0]["messages"][0]["content"][-1]["text"]
+
+
+def test_analyzer_accepts_bare_profile_json():
+    prof = load_template("boxing").to_dict()
+    client = FakeClient([msg([Block(type="text", text=json.dumps(prof))])])
+    result = GameAnalyzer(ClaudeClient(Settings(api_key="k"), client=client)).analyze(recording())
+    assert result.profile.name == "Boxing" and result.analysis == {}

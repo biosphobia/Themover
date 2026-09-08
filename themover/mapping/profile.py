@@ -118,6 +118,7 @@ class Profile:
     gesture_sensitivity: float = 1.0  # multiplies gesture thresholds (lower = easier)
     gesture_cooldown_ms: int = 220  # minimum time between two of the same gesture
     notes: str = ""
+    based_on: str = ""  # template key this profile started from ("" = coach / custom)
 
     # ------------------------------------------------------------- serialise
     def to_dict(self) -> dict[str, Any]:
@@ -132,6 +133,7 @@ class Profile:
             "gesture_sensitivity": self.gesture_sensitivity,
             "gesture_cooldown_ms": self.gesture_cooldown_ms,
             "notes": self.notes,
+            "based_on": self.based_on,
         }
 
     def to_json(self, indent: int | None = 2) -> str:
@@ -147,6 +149,7 @@ class Profile:
             gesture_sensitivity=float(data.get("gesture_sensitivity", 1.0) or 1.0),
             gesture_cooldown_ms=int(data.get("gesture_cooldown_ms", 220) or 220),
             notes=str(data.get("notes", "")),
+            based_on=str(data.get("based_on", "") or ""),
         )
         ctrls = data.get("controllers") or []
         if ctrls:

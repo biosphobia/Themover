@@ -1,15 +1,15 @@
-"""Home screen: pick a profile, see the controllers and camera, press Play."""
+"""Home screen: pick a profile, check readiness, press Play."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
-)
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 from themover.profiles import list_profiles
 from themover.ui.camera_view import CameraView
+from themover.ui.checklist import Checklist, build_items
 from themover.ui.context import AppContext
 from themover.ui.controller_card import ControllerCard
+from themover.ui.how_to_play import HowToPlayWidget
+from themover.ui.widgets import WrapLabel
 
 
 class PlayTab(QWidget):
@@ -20,14 +20,10 @@ class PlayTab(QWidget):
 
         left = QVBoxLayout()
         pick = QHBoxLayout()
-        pick.addWidget(QLabel("Profile"))
+        pick.addWidget(QLabel("Game profile"))
         self.profile_combo = QComboBox()
         self.profile_combo.setMinimumWidth(260)
         pick.addWidget(self.profile_combo, 1)
-        self.refresh_btn = QPushButton("↻")
-        self.refresh_btn.setFixedWidth(36)
-        self.refresh_btn.setToolTip("Reload profile list")
-        pick.addWidget(self.refresh_btn)
         left.addLayout(pick)
 
         self.play_btn = QPushButton("▶  PLAY")
@@ -35,16 +31,17 @@ class PlayTab(QWidget):
         self.play_btn.setCheckable(True)
         self.play_btn.setMinimumHeight(56)
         left.addWidget(self.play_btn)
-        self.hint = QLabel("Tip: hold the PS button on controller 1 to toggle Play from the couch.")
-        self.hint.setObjectName("muted")
-        self.hint.setWordWrap(True)
+        self.hint = WrapLabel("Press PLAY, switch to your game. Hold the PS button for a second to pause / resume.")
         left.addWidget(self.hint)
 
         self.style_box = QTextEdit()
         self.style_box.setReadOnly(True)
         self.style_box.setPlaceholderText("How to play with this profile…")
-        self.style_box.setMaximumHeight(140)
+        self.style_box.setMaximumHeight(130)
         left.addWidget(self.style_box)
+
+        self.checklist = Checklist()
+        left.addWidget(self.checklist)
 
         cards = QHBoxLayout()
         self.cards = [ControllerCard(0), ControllerCard(1)]
@@ -59,6 +56,11 @@ class PlayTab(QWidget):
         root.addLayout(left, 3)
 
         right = QVBoxLayout()
+        how_title = QLabel("How to play")
+        how_title.setObjectName("h2")
+        right.addWidget(how_title)
+        self.how_to_play = HowToPlayWidget()
+        right.addWidget(self.how_to_play)
         cam_title = QLabel("Camera")
         cam_title.setObjectName("h2")
         right.addWidget(cam_title)
@@ -76,10 +78,21 @@ class PlayTab(QWidget):
 
         self.reload_profiles()
         self.profile_combo.currentIndexChanged.connect(self._on_pick)
-        self.refresh_btn.clicked.connect(self.reload_profiles)
         self.play_btn.toggled.connect(self._on_play)
         ctx.profile_changed.connect(self._on_profile_changed)
         ctx.armed_changed.connect(self._on_armed)
+        ctx.advanced_changed.connect(self.set_advanced)
+        self.set_advanced(ctx.advanced)
+        self._tick = 0
+
+    def set_advanced(self, on: bool) -> None:
+        for c in self.cards:
+            c.set_advanced(on)
+        self.active.setVisible(on)
+        self.output_status.setVisible(on)
+        self.cam_status.setVisible(on)
+        self.checklist.show_all = on
+        self.checklist.update_items(build_items(self.ctx))
 
     # ---------------------------------------------------------------- slots
     def reload_profiles(self) -> None:
@@ -88,8 +101,6 @@ class PlayTab(QWidget):
         self._keys: list[str] = []
         for key, p in list_profiles().items():
             label = f"{p.name}  —  {p.game}" if p.game else p.name
-            if key.startswith("user:"):
-                label = "★ " + label
             self.profile_combo.addItem(label, key)
             self._keys.append(key)
         if self.ctx.profile_key in self._keys:
@@ -115,6 +126,13 @@ class PlayTab(QWidget):
     def _on_profile_changed(self, profile, reason: str) -> None:
         text = profile.play_style or profile.description
         self.style_box.setPlainText(f"{profile.name}\n\n{text}")
+        self.how_to_play.set_profile(profile)
+        if reason in ("saved", "analysis", "created", "deleted", "renamed") or self.ctx.profile_key not in getattr(self, "_keys", []):
+            self.reload_profiles()
+        elif reason == "edited" and self.ctx.profile_key in getattr(self, "_keys", []):
+            # Keep the dropdown label in sync with a renamed profile.
+            idx = self._keys.index(self.ctx.profile_key)
+            self.profile_combo.setItemText(idx, f"{profile.name}  —  {profile.game}" if profile.game else profile.name)
         if self.ctx.profile_key in getattr(self, "_keys", []):
             self.profile_combo.blockSignals(True)
             self.profile_combo.setCurrentIndex(self._keys.index(self.ctx.profile_key))
@@ -132,3 +150,6 @@ class PlayTab(QWidget):
             self.cam_status.setText(f"{cam.source.name} · {cam.fps:.0f} fps · wheel {rt.devices.wheel_angle:+.0f}° ({rt.devices.wheel_source})")
         targets = sorted(rt.engine.stats.active_targets)
         self.active.setText(("active: " + ", ".join(targets)) if targets else "")
+        self._tick += 1
+        if self._tick % 10 == 0:  # checklist twice a second is plenty
+            self.checklist.update_items(build_items(self.ctx))
