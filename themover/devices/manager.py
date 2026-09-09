@@ -43,6 +43,7 @@ class DeviceManager:
         self.low_latency = False  # True while a rhythm profile is active
         self.frame_taps: list = []  # callables(index, accel, gyro, t, trigger, move) - full-rate IMU listeners
         self.hit_taps: list = []  # callables(index, hit)
+        self.gesture_taps: list = []  # callables(index, gesture_name, t)
         self.tracker = SphereTracker(
             [ColorTarget(tuple(c)) for c in settings.controller_colors[:NUM_CONTROLLERS]],
             mirror=settings.camera_mirror,
@@ -307,7 +308,12 @@ class DeviceManager:
                 ctrl.poll()
                 st = ctrl.state
                 st.roll, st.pitch, st.yaw = self.filters[i].update(st.accel, st.gyro, dt)
-                self.gestures[i].update(st.accel, st.gyro, dt, now)
+                for name in self.gestures[i].update(st.accel, st.gyro, dt, now):
+                    for tap in self.gesture_taps:
+                        try:
+                            tap(i, name, now)
+                        except Exception:
+                            pass
                 if not isinstance(ctrl, HidMoveController) or not self.low_latency:
                     # No reader thread (simulated controller, or not a rhythm profile): detect here.
                     hit = self.hits[i].update(st.accel, now, st.trigger, st.buttons.get("move", False))

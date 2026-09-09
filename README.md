@@ -191,26 +191,37 @@ before a map.
 
 ### Fine-tune from a recording (the Fine-tune tab)
 
-When detection does not match how *you* strike, record it and let the coach fit the detector:
+Works for any profile, not just rhythm games: when the app does not react the way *you* move,
+record it, tag it, and let the coach tune the profile from real data.
 
-1. Pick the profile to tune on the Play tab (e.g. osu! taiko), open **Fine-tune**, choose a length
-   and whether to include camera footage (320×240, ≤ 20 fps, ~2 MB/min) and/or screen footage
-   (640 px wide, ≤ 10 fps, ~4 MB/min), press **Record** and play a few clear strokes. Every
-   controller frame (accelerometer, gyro, trigger, buttons, orientation, camera tracking) is stored
-   at full report rate, together with the hits the detector fired.
-2. The timeline shows both hands (|accel|−1 g thick, components thin, trigger shaded), detected
-   hits as triangles (red don, blue kat) and the video frame at the cursor. Click/drag to scrub,
-   wheel to zoom, Shift+wheel to pan, ← → to step 10 ms, Space to play.
-3. Put the cursor where a hit *should* register and press **D** (don) / **K** (kat) or the Tag
-   button (hand and note optional). Tags are saved with the recording.
-4. **Auto-fit locally** searches the detector settings (onset, stop, kat angle, refractory) for the
-   best match to your tags and applies them; hollow markers show where the new settings fire.
-5. **Send everything to the coach** hands the recording, the tags, thumbnails at each tag, the
-   current score and your explanation to Claude with tools to evaluate candidate settings against
-   the tags, auto-fit, inspect raw samples around a tag, apply settings and edit the profile. It
-   reports what changed and how well it now scores. Everything is logged in `coach_logs`.
+1. Pick the profile to tune on the Play tab (taiko, sword, wheel, shooter...), open **Fine-tune**,
+   choose a length and whether to include camera footage (320×240, ≤ 20 fps, ~2 MB/min) and/or
+   screen footage (640 px wide, ≤ 10 fps, ~4 MB/min), press **Record** and play for real. Every
+   controller frame (accelerometer, gyro, trigger, buttons, roll/pitch/yaw, camera position) is
+   stored at full report rate, together with every hit and gesture the detectors fired, every key /
+   mouse / gamepad button the mapping sent to the game, and (optionally) your own keyboard/mouse.
+2. The timeline shows both hands (|accel|−1 g thick, components thin, trigger shaded), hits as
+   triangles, gestures as labelled diamonds, a "sent to game" lane with the presses the mapping
+   made, and the video frame at the cursor. Click/drag to scrub, wheel to zoom, Shift+wheel to
+   pan, ← → to step 10 ms, Space to play.
+3. Put the cursor where something *should* have happened and tag it. The tag box suggests what
+   fits the active profile: its hit kinds (`don` / `kat`), its gestures (`swing_left`, `thrust`...),
+   its outputs (`key.space`, `mouse.left`...), plus `nothing` (= nothing should fire here) and free
+   notes ("wheel should be centred"). Keys: 1–9 tag with the n-th suggestion, D/K don/kat,
+   N nothing. Tags are saved with the recording.
+4. **Auto-fit locally** replays the recording through the same detectors the game uses and searches
+   the tuning the tags need: hit settings (onset, stop, kat angle, refractory) for don/kat tags,
+   gesture sensitivity and cooldown for gesture tags. It applies the best result; hollow markers
+   show what fires with the new tuning.
+5. **Send everything to the coach** hands the recording, tags, thumbnails at each tag, the bindings
+   in use, the current score and your explanation to Claude with tools to inspect the raw samples
+   around a tag (including orientation and camera position), evaluate candidate tuning against the
+   tags, auto-fit, apply tuning, and edit the profile itself (bindings, ranges, modes) for action
+   tags and notes. It reports what changed and how well it now scores. Everything is logged in
+   `coach_logs`.
 
-Detector settings live in the profile (`hit_config`) so a tuned profile stays tuned.
+Tuning lives in the profile (`hit_config`, `gesture_sensitivity`, `gesture_cooldown_ms`) so a
+tuned profile stays tuned.
 
 Preset keys: right hand J (don) / K (kat), left hand F (don) / D (kat), Cross = Enter, Circle = Esc,
 Triangle / Square scroll the song list, F2 random, ` quick retry. Rumble thumps on every hit.

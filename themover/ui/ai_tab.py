@@ -241,21 +241,13 @@ class AITab(QWidget):
     def send_recording(self, session, explanation: str, complete: bool) -> None:
         """Attach a tagged motion recording and ask the coach to fine-tune from it."""
         from themover.ai.finetune import FINETUNE_INSTRUCTIONS, FinetuneTools, build_finetune_content
-        from themover.core.hits import hit_config_to_dict
-
         client = self._client_or_warn(modal=False)
         if client is None or self._busy:
             return
         if self.chat is None:
             self.chat = CoachChat(client, _Host(self.ctx), coach_log=self.coach_log)
         rt = self.ctx.runtime
-
-        def current_settings() -> dict:
-            if rt.profile.hit_config:
-                return dict(rt.profile.hit_config)
-            return hit_config_to_dict(rt.devices.hits[0].config) if rt.devices.hits else {}
-
-        tools = FinetuneTools(session, apply_settings=self._apply_hit_settings, get_settings=current_settings, complete=complete)
+        tools = FinetuneTools(session, apply_settings=self._apply_tuning, get_settings=rt.current_tuning, complete=complete)
         self.chat.attach(tools, FINETUNE_INSTRUCTIONS)
         content = build_finetune_content(session, explanation, complete)
         self._append("You", f"Fine-tune from recording {session.folder.name} ({len(session.tags)} tags)." + (f" {explanation}" if explanation else ""), "#ff3fb4")
@@ -272,8 +264,8 @@ class AITab(QWidget):
         w.signals.error.connect(self._on_error)
         run_in_background(w)
 
-    def _apply_hit_settings(self, settings: dict) -> dict:
-        applied = self.ctx.runtime.apply_hit_config(settings)
+    def _apply_tuning(self, settings: dict) -> dict:
+        applied = self.ctx.runtime.apply_tuning(settings)
         # persist + notify tabs (runs on the worker thread; apply_profile is thread-safe)
         self.ctx.apply_profile(self.ctx.profile, reason="chat")
         return applied
@@ -311,8 +303,8 @@ class AITab(QWidget):
 
     def _on_tool(self, name: str, args, out: str) -> None:
         pretty = {
-            "recording_summary": "read the recording", "tag_window": "inspected a tag", "get_hit_settings": "read detector settings",
-            "evaluate_hit_settings": "tried detector settings", "auto_fit_hit_settings": "ran auto-fit", "apply_hit_settings": "applied detector settings",
+            "recording_summary": "read the recording", "tag_window": "inspected a tag", "get_tuning": "read detector settings",
+            "evaluate_tuning": "tried detector settings", "auto_fit_tuning": "ran auto-fit", "apply_tuning": "applied detector settings",
             "add_bindings": "added bindings", "modify_binding": "modified a binding", "remove_bindings": "removed bindings",
             "set_feedback": "updated feedback rules", "set_profile_meta": "updated profile info", "replace_profile": "replaced the profile",
             "buzz_controller": "buzzed a controller", "save_profile": "saved the profile", "get_profile": "read the profile",

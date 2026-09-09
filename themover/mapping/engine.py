@@ -178,6 +178,7 @@ class MappingEngine:
         self.fast_sources: set[str] = set()
         self._fast_held: dict[str, int] = {}
         self._lock = threading.RLock()
+        self.action_taps: list = []  # callables(target, down, t): every button press/release the mapping emits
 
     # ----------------------------------------------------------------- setup
     def set_profile(self, profile: Profile) -> None:
@@ -288,6 +289,11 @@ class MappingEngine:
     # ------------------------------------------------------------- helpers
     def _press(self, target: str, down: bool) -> None:
         family, _, name = target.partition(".")
+        for tap in self.action_taps:
+            try:
+                tap(target, down, time.monotonic())
+            except Exception:
+                pass
         if family == "key":
             (self.sink.key_down if down else self.sink.key_up)(name)
         elif family == "mouse":

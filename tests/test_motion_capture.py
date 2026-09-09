@@ -76,7 +76,7 @@ def test_session_roundtrip_tags_and_windows(tmp_path):
     assert loaded.rate(0) == pytest.approx(RATE, rel=0.01) and len(loaded.hits) == 1
     win = loaded.tag_window(1, half_ms=100)
     assert win["tag"].startswith("don") and "c0" in win["hands"] and len(win["hands"]["c0"]["rows"]) >= 10
-    assert win["hands"]["c0"]["columns"][0] == "ms" and win["detected_hits_nearby"]
+    assert win["hands"]["c0"]["columns"][0] == "ms" and "roll" in win["hands"]["c0"]["columns"] and win["detected_hits_nearby"]
     assert "Motion recording" in loaded.summary() and "tags: 2" in loaded.summary()
     loaded.remove_tag(0)
     loaded.save_tags()
@@ -104,13 +104,13 @@ def test_finetune_tools_and_content(tmp_path):
     win = json.loads(tools.execute("tag_window", {"index": 0}))
     assert win["tag"].startswith("don")
     assert "no tag" in tools.execute("tag_window", {"index": 9})
-    ev = json.loads(tools.execute("evaluate_hit_settings", {"settings": {"stop_g": 1.3}}))
+    ev = json.loads(tools.execute("evaluate_tuning", {"settings": {"stop_g": 1.3}}))
     assert "2/2" in ev["summary"] and ev["settings"]["stop_g"] == 1.3 and not applied
-    fit = json.loads(tools.execute("auto_fit_hit_settings", {}))
+    fit = json.loads(tools.execute("auto_fit_tuning", {}))
     assert fit["best_settings"]["stop_g"] < 6.0
-    out = tools.execute("apply_hit_settings", {"settings": fit["best_settings"]})
+    out = tools.execute("apply_tuning", {"settings": fit["best_settings"]})
     assert "Applied" in out and applied and applied[-1]["stop_g"] == fit["best_settings"]["stop_g"]
-    assert json.loads(tools.execute("get_hit_settings", {}))["stop_g"] == fit["best_settings"]["stop_g"]
+    assert json.loads(tools.execute("get_tuning", {}))["stop_g"] == fit["best_settings"]["stop_g"]
     with pytest.raises(ValueError):
         tools.execute("nope", {})
     content = build_finetune_content(s, "second one is a kat", complete=True)
@@ -153,7 +153,7 @@ def test_chat_attach_routes_finetune_tools(tmp_path):
             self.messages = self
             self.beta = types.SimpleNamespace(messages=self)
             self.script = [
-                types.SimpleNamespace(content=[Block(type="tool_use", id="t1", name="evaluate_hit_settings", input={"settings": {"stop_g": 1.3}})], stop_reason="tool_use", model="m", usage=None),
+                types.SimpleNamespace(content=[Block(type="tool_use", id="t1", name="evaluate_tuning", input={"settings": {"stop_g": 1.3}})], stop_reason="tool_use", model="m", usage=None),
                 types.SimpleNamespace(content=[Block(type="text", text="Fitted.")], stop_reason="end_turn", model="m", usage=None),
             ]
 
@@ -232,7 +232,86 @@ def test_recorder_captures_simulated_controllers_and_synthetic_camera(tmp_path, 
         assert (session.camera_video.stat().st_size) < 2_000_000
         # Camera callback for the tracker was restored after recording.
         assert rt.devices.camera.on_frame == rt.devices._on_frame
-        assert not rt.devices.frame_taps and not rt.devices.hit_taps
+        assert not rt.devices.frame_taps and not rt.devices.hit_taps and not rt.devices.gesture_taps and not rt.engine.action_taps
+        assert session.meta["tuning"]["gesture_cooldown_ms"] == rt.profile.gesture_cooldown_ms and session.meta["bindings"]
         session.close()
     finally:
         rt.stop()
+
+
+def synth_gesture_session(tmp_path, swings, duration=6.0):
+    """Right hand does sideways swings (linear accel along x) peaking at the given times."""
+    s = M.MotionSession(tmp_path / "motion-gest")
+    n = int(duration * RATE)
+    t = np.arange(n) * DT
+    d = np.zeros((n, len(M.COLUMNS)), np.float32)
+    d[:, 1] = 1.0  # gravity on +y (the gesture detector's default guess)
+    for peak_t, direction in swings:
+        i0 = int((peak_t - 0.05) * RATE)
+        for k in range(int(0.1 * RATE)):
+            d[i0 + k, 0] += direction * 0.9 * math.sin(math.pi * (k + 1) / (int(0.1 * RATE) + 1))
+    s.t = [t, np.zeros(0)]
+    s.data = [d, np.zeros((0, len(M.COLUMNS)), np.float32)]
+    s.meta = {"duration": duration, "tuning": M.normalise_tuning({"gesture_sensitivity": 1.0, "gesture_cooldown_ms": 220}), "profile": "sword"}
+    return s
+
+
+def test_gesture_tags_replay_and_auto_fit(tmp_path):
+    swings = [(1.0, 1), (2.0, -1), (3.0, 1), (4.0, -1)]
+    s = synth_gesture_session(tmp_path, swings)
+    for t, direction in swings:
+        s.add_tag(t, "swing_right" if direction > 0 else "swing_left", 0)
+    assert s.families_in_tags() == {"gesture"}
+    # 0.9 g swings are below the default 1.1 g threshold: everything is missed with sensitivity 1.0 ...
+    res = s.evaluate(None, complete=True)
+    assert res.tags == 4 and res.matched == 0 and res.missed == 4
+    # ... and auto-fit lowers the sensitivity until every swing fires with the right direction.
+    cfg, best = M.auto_fit(s, None, complete=True)
+    assert best.matched == 4 and best.wrong_kind == 0 and best.false_positives == 0
+    assert cfg["gesture_sensitivity"] < 1.0 and abs(best.mean_offset_ms) < 60
+    events = s.replay_events(cfg)
+    assert len(events) == 4 and all(e["family"] == "gesture" for e in events)
+    # A 'nothing' tag where a swing fires counts it as a false positive.
+    s.add_tag(3.0, "nothing", -1)
+    worse = s.evaluate(cfg, complete=True)
+    assert worse.false_positives == 1 and worse.score < best.score
+
+
+def test_action_tags_compare_with_recorded_actions_and_suggestions(tmp_path):
+    from themover.mapping.templates import load_template
+
+    s = synth_session(tmp_path, [(1.0, "don")])
+    s.actions = [{"t": 1.01, "target": "key.j", "down": True}, {"t": 1.05, "target": "key.j", "down": False},
+                 {"t": 2.0, "target": "key.space", "down": True}, {"t": 2.1, "target": "key.space", "down": False}]
+    s.add_tag(1.0, "key.j", -1)
+    s.add_tag(2.5, "KEY.SPACE", -1, "should have jumped here")
+    s.add_tag(3.0, "felt laggy", -1)  # free note
+    assert [t.kind for t in s.tags] == ["key.j", "key.space", "felt laggy"] and s.tags[2].family == ""
+    res = s.evaluate(None, complete=False)
+    assert res.tags == 2 and res.matched == 1 and res.missed == 1
+    win = s.tag_window(0)
+    assert win["actions_nearby"] and win["family"] == "action"
+    assert "mapping sent" in s.summary()
+    kinds = M.suggested_tag_kinds(load_template("osu_taiko"))
+    assert kinds[:2] == ["don", "kat"] and "nothing" in kinds and any(k.startswith("key.") for k in kinds)
+    sword = M.suggested_tag_kinds(load_template("sword_and_shield"))
+    assert any(k in M.GESTURE_NAMES for k in sword)
+    folder = s.save()
+    loaded = M.MotionSession.load(folder)
+    assert loaded.actions == s.actions and loaded.tags[2].kind == "felt laggy"
+
+
+def test_runtime_apply_tuning_updates_gestures_and_profile():
+    from themover.config import Settings
+    from themover.mapping.runtime import Runtime
+    from themover.mapping.templates import load_template
+    from themover.outputs.sink import RecordingSink
+
+    rt = Runtime(Settings(camera_backend="synthetic", controller_backend="simulated"), sink=RecordingSink())
+    rt.set_profile(load_template("sword_and_shield"))
+    tuning = rt.current_tuning()
+    assert tuning["gesture_sensitivity"] == rt.profile.gesture_sensitivity and "stop_g" in tuning
+    applied = rt.apply_tuning({"gesture_sensitivity": 0.6, "gesture_cooldown_ms": 120, "stop_g": 1.7})
+    assert applied["gesture_sensitivity"] == 0.6 and rt.profile.gesture_cooldown_ms == 120 and rt.profile.hit_config["stop_g"] == 1.7
+    assert rt.devices.gestures[0].config.swing_threshold_g == pytest.approx(1.1 * 0.6) and rt.devices.gestures[0].config.cooldown_s == pytest.approx(0.12)
+    assert rt.devices.hits[0].config.stop_g == 1.7

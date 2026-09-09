@@ -11,8 +11,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from themover.ai.motion_capture import MotionRecorder, MotionSession, TAG_KINDS, auto_fit
-from themover.core.hits import hit_config_from_dict
+from themover.ai.motion_capture import MotionRecorder, MotionSession, auto_fit, suggested_tag_kinds
 from themover.ui.context import AppContext
 from themover.ui.timeline import TimelineWidget, VideoView
 from themover.ui.widgets import WrapLabel
@@ -37,7 +36,7 @@ class FinetuneTab(QWidget):
 
         # ------------------------------------------------------ recorder
         rec = QFrame(); rec.setObjectName("card"); rl = QVBoxLayout(rec)
-        title = QLabel("Record real strokes, tag where each hit should register, let the coach fit the detector")
+        title = QLabel("Record real play, tag the moments that should (or should not) trigger, let the coach tune the profile")
         title.setObjectName("h2"); title.setWordWrap(True)
         rl.addWidget(title)
         row = QHBoxLayout()
@@ -53,7 +52,7 @@ class FinetuneTab(QWidget):
         rl.addLayout(row)
         self.progress = QProgressBar(); self.progress.setRange(0, 1000)
         rl.addWidget(self.progress)
-        self.status = WrapLabel("Pick the profile you want to tune on the Play tab first (e.g. osu! taiko), then Record and play a few clear strokes.")
+        self.status = WrapLabel("Pick the profile you want to tune on the Play tab first, then Record and play for real: drum strokes, sword swings, wheel turns, reloads - whatever the game needs.")
         rl.addWidget(self.status)
         root.addWidget(rec)
 
@@ -75,13 +74,14 @@ class FinetuneTab(QWidget):
             transport.addWidget(w)
         transport.addSpacing(20)
         transport.addWidget(QLabel("Tag at cursor:"))
-        self.tag_kind = QComboBox(); self.tag_kind.addItems(list(TAG_KINDS))
+        self.tag_kind = QComboBox(); self.tag_kind.setEditable(True); self.tag_kind.setMinimumWidth(130)
+        self.tag_kind.setToolTip("What should have happened here: don / kat, a gesture (swing_left, thrust...), an output (key.space), nothing, or any note")
         self.tag_hand = QComboBox(); self.tag_hand.addItems(["either hand", "right hand", "left hand"])
         self.tag_note = QLineEdit(); self.tag_note.setPlaceholderText("note (optional)")
         self.tag_btn = QPushButton("+ Tag"); self.tag_btn.setObjectName("accent2")
         transport.addWidget(self.tag_kind); transport.addWidget(self.tag_hand); transport.addWidget(self.tag_note, 1); transport.addWidget(self.tag_btn)
         root.addLayout(transport)
-        hint = WrapLabel("Click / drag the timeline to move, wheel to zoom, Shift+wheel to pan. Keys: ← → step, Space play, D = don tag, K = kat tag, Delete removes the selected tag.")
+        hint = WrapLabel("Click / drag the timeline to move, wheel to zoom, Shift+wheel to pan. Keys: ← → step, Space play, 1-9 = tag with the n-th suggested kind, D / K = don / kat, N = nothing should fire here, Delete removes the selected tag.")
         root.addWidget(hint)
 
         bottom = QHBoxLayout()
@@ -95,8 +95,8 @@ class FinetuneTab(QWidget):
         bottom.addWidget(self.tag_table, 2)
         side = QVBoxLayout()
         self.del_tag_btn = QPushButton("Remove selected tag")
-        self.explain = QLineEdit(); self.explain.setPlaceholderText("Explain to the coach, e.g. 'the second hit is a kat, it was missed'")
-        self.complete_cb = QCheckBox("I tagged every real hit (extra detections count as mistakes)")
+        self.explain = QLineEdit(); self.explain.setPlaceholderText("Explain to the coach, e.g. 'the second hit is a kat, it was missed' or 'the wheel should be centred here'")
+        self.complete_cb = QCheckBox("I tagged every moment that should trigger (extra detections count as mistakes)")
         self.autofit_btn = QPushButton("Auto-fit locally (no AI)")
         self.send_btn = QPushButton("✨  Send everything to the coach"); self.send_btn.setObjectName("accent2")
         self.result_lbl = WrapLabel("")
@@ -129,7 +129,19 @@ class FinetuneTab(QWidget):
         for w in (self.input_cb, self.screen_cb):
             self._advanced_widgets.append(w)
         ctx.advanced_changed.connect(self.set_advanced)
+        ctx.profile_changed.connect(lambda *_: self._refresh_kinds())
         self.set_advanced(ctx.advanced)
+        self._refresh_kinds()
+
+    def _refresh_kinds(self) -> None:
+        """Offer tag kinds that fit the active profile (its hit kinds, gestures and button outputs)."""
+        current = self.tag_kind.currentText()
+        self.tag_kind.blockSignals(True)
+        self.tag_kind.clear()
+        self.tag_kind.addItems(suggested_tag_kinds(self.ctx.profile))
+        if current and self.tag_kind.findText(current) >= 0:
+            self.tag_kind.setCurrentText(current)
+        self.tag_kind.blockSignals(False)
 
     def set_advanced(self, on: bool) -> None:
         for w in self._advanced_widgets:
@@ -157,7 +169,7 @@ class FinetuneTab(QWidget):
             self.status.setText(f"Could not start recording: {exc}")
             return
         self.record_btn.setText("■  Stop")
-        self.status.setText("Recording… play your strokes now.")
+        self.status.setText("Recording… play for real now.")
 
     def _on_progress(self, elapsed: float, total: float) -> None:
         self.progress.setValue(int(1000 * elapsed / max(total, 1e-3)))
@@ -168,7 +180,8 @@ class FinetuneTab(QWidget):
         self.set_session(session)
         self.refresh_sessions()
         n = sum(len(t) for t in session.t)
-        self.status.setText(f"Recorded {session.duration:.1f} s: {n} controller samples, {len(session.hits)} hits detected, video: camera={'yes' if session.camera_video else 'no'} screen={'yes' if session.screen_video else 'no'}. Saved to {session.folder}. Now drop tags where hits should register.")
+        sent = len([a for a in session.actions if a.get("down")])
+        self.status.setText(f"Recorded {session.duration:.1f} s: {n} controller samples, {len(session.hits)} hits, {len(session.gestures)} gestures, {sent} presses sent to the game, video: camera={'yes' if session.camera_video else 'no'} screen={'yes' if session.screen_video else 'no'}. Saved to {session.folder}. Now drop tags where things should (or should not) have fired.")
 
     def _load_selected(self) -> None:
         path = self.load_combo.currentData()
@@ -230,7 +243,7 @@ class FinetuneTab(QWidget):
     def _add_tag(self, kind: Optional[str] = None) -> None:
         if self.session is None:
             return
-        kind = kind or self.tag_kind.currentText()
+        kind = (kind or self.tag_kind.currentText()).strip() or "note"
         hand = {0: -1, 1: 0, 2: 1}[self.tag_hand.currentIndex()]
         self.session.add_tag(self.timeline.cursor, kind, hand, self.tag_note.text().strip())
         self.session.save_tags()
@@ -275,6 +288,10 @@ class FinetuneTab(QWidget):
             self._add_tag("don")
         elif key == Qt.Key_K:
             self._add_tag("kat")
+        elif key == Qt.Key_N:
+            self._add_tag("nothing")
+        elif Qt.Key_1 <= key <= Qt.Key_9 and key - Qt.Key_1 < self.tag_kind.count():
+            self._add_tag(self.tag_kind.itemText(key - Qt.Key_1))
         elif key == Qt.Key_Delete:
             self._remove_tag()
         else:
@@ -284,12 +301,12 @@ class FinetuneTab(QWidget):
     def _autofit(self) -> None:
         if self.session is None:
             return
-        if not any(t.kind in ("don", "kat") for t in self.session.tags):
-            self.result_lbl.setText("Add at least one don / kat tag first.")
+        if not self.session.families_in_tags() & {"hit", "gesture"}:
+            self.result_lbl.setText("Auto-fit needs at least one don / kat or gesture tag (action and note tags are for the coach).")
             return
         self.result_lbl.setText("Fitting…")
         session, complete = self.session, self.complete_cb.isChecked()
-        base = dict(self.ctx.profile.hit_config)
+        base = self.ctx.runtime.current_tuning()
 
         def job(signals):
             return auto_fit(session, base, complete, progress=lambda d, n: signals.progress.emit(d, n))
@@ -301,11 +318,14 @@ class FinetuneTab(QWidget):
 
     def _on_autofit(self, result) -> None:
         cfg, res = result
-        applied = self.ctx.runtime.apply_hit_config(cfg)
+        before = self.ctx.runtime.current_tuning()
+        applied = self.ctx.runtime.apply_tuning(cfg)
         self.ctx.apply_profile(self.ctx.profile, reason="edited")
-        self.timeline.replay_hits = self.session.replay(hit_config_from_dict(applied), 0) + self.session.replay(hit_config_from_dict(applied), 1)
+        self.timeline.replay_hits = self.session.replay_events(applied)
         self.timeline.update()
-        self.result_lbl.setText(f"Applied: {res.text()}  (hollow markers = hits with the new settings). Settings: " + ", ".join(f"{k}={v:g}" for k, v in applied.items() if k in ("onset_g", "stop_g", "kat_angle_deg", "refractory_s")))
+        changed = {k: v for k, v in applied.items() if before.get(k) != v}
+        shown = ", ".join(f"{k}={v:g}" for k, v in (changed or {k: applied[k] for k in ("stop_g", "onset_g", "gesture_sensitivity") if k in applied}).items())
+        self.result_lbl.setText(f"Applied: {res.text()}  (hollow markers = what fires with the new tuning). {'Changed' if changed else 'Kept'}: {shown}")
 
     def _send(self) -> None:
         if self.session is None:

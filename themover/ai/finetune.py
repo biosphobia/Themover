@@ -1,44 +1,53 @@
-"""Hand a tagged motion recording to the coach and give it tools to fit the detector."""
+"""Hand a tagged motion recording to the coach and give it tools to tune the profile from it."""
 from __future__ import annotations
 
 import base64
 import json
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from themover.ai.motion_capture import MotionSession, auto_fit
-from themover.core.hits import hit_config_to_dict
+
+_TUNING_PROPS = {
+    "onset_g": {"type": "number", "description": "drum hits: acceleration (g) that starts a stroke"},
+    "stop_g": {"type": "number", "description": "drum hits: how sharp the stop must be (g); lower = easier"},
+    "kat_angle_deg": {"type": "number", "description": "drum hits: angle from straight-down that separates don from kat"},
+    "refractory_s": {"type": "number", "description": "drum hits: minimum seconds between two hits of one hand"},
+    "max_stroke_s": {"type": "number"},
+    "up_angle_deg": {"type": "number"},
+    "onset_frames": {"type": "integer"},
+    "gesture_sensitivity": {"type": "number", "description": "gestures (swing/thrust/flick/shake): multiplies the thresholds; 0.6 easy, 1.0 normal, 1.5 needs hard moves"},
+    "gesture_cooldown_ms": {"type": "integer", "description": "gestures: minimum ms between two of the same gesture"},
+}
+_SETTINGS_SCHEMA = {"type": "object", "properties": _TUNING_PROPS, "additionalProperties": False}
 
 FINETUNE_TOOLS: list[dict[str, Any]] = [
-    {"name": "recording_summary", "description": "Summary of the attached motion recording: rates, tags, hits detected while recording, and how the CURRENT detector settings score against the tags.",
+    {"name": "recording_summary", "description": "Summary of the attached motion recording: rates, orientation ranges, what fired while recording, the bindings in use, the tags, and how the CURRENT tuning scores against the tags.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
-    {"name": "tag_window", "description": "Raw accelerometer/gyro/trigger samples around one tag (index from recording_summary), plus hits detected near it.",
-     "input_schema": {"type": "object", "properties": {"index": {"type": "integer"}, "half_ms": {"type": "number"}}, "required": ["index"], "additionalProperties": False}},
-    {"name": "get_hit_settings", "description": "The drum-hit detector settings currently in use (onset_g, stop_g, kat_angle_deg, refractory_s, max_stroke_s, up_angle_deg, onset_frames).",
+    {"name": "tag_window", "description": "Raw samples around one tag (index from recording_summary): accel, gyro, orientation, trigger, camera position, plus hits / gestures / mapping actions / player inputs near it.",
+     "input_schema": {"type": "object", "properties": {"index": {"type": "integer"}, "half_ms": {"type": "number", "description": "window half-width in ms (default 150)"}}, "required": ["index"], "additionalProperties": False}},
+    {"name": "get_tuning", "description": "The detector tuning in use: drum-hit settings (onset_g, stop_g, kat_angle_deg, refractory_s, ...) and gesture_sensitivity / gesture_cooldown_ms.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
-    {"name": "evaluate_hit_settings", "description": "Replay the recording through the detector with candidate settings and score against the tags (matched / missed / wrong colour / extra, timing offset). Call repeatedly to search; nothing is applied.",
-     "input_schema": {"type": "object", "properties": {"settings": {"type": "object", "properties": {
-         "onset_g": {"type": "number"}, "stop_g": {"type": "number"}, "kat_angle_deg": {"type": "number"}, "refractory_s": {"type": "number"},
-         "max_stroke_s": {"type": "number"}, "up_angle_deg": {"type": "number"}, "onset_frames": {"type": "integer"}}, "additionalProperties": False},
-         "complete": {"type": "boolean", "description": "true if the player tagged every real hit (then extra detections count as false positives)"}},
-         "required": ["settings"], "additionalProperties": False}},
-    {"name": "auto_fit_hit_settings", "description": "Local coordinate search over the detector settings that maximises the tag score. Returns the best settings and their score; nothing is applied.",
+    {"name": "evaluate_tuning", "description": "Replay the recording through the hit and gesture detectors with candidate tuning and score it against the tags (matched / missed / wrong kind / extra, timing offset). Call repeatedly to search; nothing is applied.",
+     "input_schema": {"type": "object", "properties": {"settings": _SETTINGS_SCHEMA,
+                                                       "complete": {"type": "boolean", "description": "true if the player tagged every moment that should fire (then extra detections count as false positives)"}},
+                      "required": ["settings"], "additionalProperties": False}},
+    {"name": "auto_fit_tuning", "description": "Local coordinate search over the tuning fields the tags use (hit settings for don/kat tags, gesture sensitivity/cooldown for gesture tags) that maximises the tag score. Returns the best settings and score; nothing is applied.",
      "input_schema": {"type": "object", "properties": {"complete": {"type": "boolean"}}, "additionalProperties": False}},
-    {"name": "apply_hit_settings", "description": "Apply detector settings live and store them in the active profile.",
-     "input_schema": {"type": "object", "properties": {"settings": {"type": "object", "properties": {
-         "onset_g": {"type": "number"}, "stop_g": {"type": "number"}, "kat_angle_deg": {"type": "number"}, "refractory_s": {"type": "number"},
-         "max_stroke_s": {"type": "number"}, "up_angle_deg": {"type": "number"}, "onset_frames": {"type": "integer"}}, "additionalProperties": False}},
-         "required": ["settings"], "additionalProperties": False}},
+    {"name": "apply_tuning", "description": "Apply tuning live and store it in the active profile.",
+     "input_schema": {"type": "object", "properties": {"settings": _SETTINGS_SCHEMA}, "required": ["settings"], "additionalProperties": False}},
 ]
 
 FINETUNE_INSTRUCTIONS = """FINE-TUNING FROM A RECORDING
-A motion recording with the player's tags is attached. Tags mark the exact moment a hit should have registered and which
-colour it should be (don = straight down, kat = angled / rim). Work like an engineer:
-1. Call recording_summary, then tag_window on a few tags (matched and missed) to see what the strokes really look like.
-2. Search settings with evaluate_hit_settings (and/or auto_fit_hit_settings) until most tags match with a small, consistent offset.
-   stop_g sets how sharp the stop must be, onset_g how much acceleration starts a stroke, kat_angle_deg separates don from kat,
-   refractory_s limits repeats. If don/kat are confused, consider the trigger-modifier fallback in the profile too.
-3. apply_hit_settings with the best result, adjust profile bindings if the recording shows they are wrong, and tell the player
-   in plain words what you changed, how well it scores now, and what to try if it is still off. Keep it short.
+A motion recording of real play with the player's tags is attached. A tag marks the exact moment something should have
+happened. Tag kinds: don / kat (drum hits), a gesture name (swing_left, swing_down, thrust, flick, shake...), an output action
+(key.space, mouse.left, gamepad.a = "the mapping should have pressed this here"), nothing (= nothing should fire here) or
+a free note. Work like an engineer:
+1. Call recording_summary, then tag_window on a few tags (matched and missed) to see what the motion really looks like:
+   accel/gyro for strokes and gestures, roll/pitch/yaw and camera position for wheel, aiming or lean bindings.
+2. For hit or gesture tags, search with evaluate_tuning (and/or auto_fit_tuning) until most tags match with a small,
+   consistent offset, then apply_tuning. For action tags, notes or orientation-based controls, fix the profile itself with
+   the normal profile tools (bindings, thresholds, input ranges, modes, deadzones, tap_ms, gesture choice).
+3. Tell the player in plain words what you changed, how well it scores now, and what to try if it is still off. Short.
 """
 
 
@@ -49,7 +58,7 @@ def build_finetune_content(session: MotionSession, explanation: str = "", comple
     if explanation:
         text += f"\nPlayer's explanation: {explanation}"
     current = session.evaluate(None, complete)
-    text += f"\nCurrent detector settings score: {current.text()}"
+    text += f"\nCurrent tuning score: {current.text()}"
     if current.per_tag:
         text += "\nPer tag: " + json.dumps(current.per_tag[:40], separators=(",", ":"))
     text += "\n" + FINETUNE_INSTRUCTIONS
@@ -87,24 +96,25 @@ class FinetuneTools:
     def execute(self, name: str, args: dict[str, Any]) -> str:
         if name == "recording_summary":
             res = self.session.evaluate(self.get_settings(), self.complete)
-            return self.session.summary() + "\nCurrent settings: " + json.dumps(self.get_settings()) + "\nScore: " + res.text() + "\nTags with index: " + json.dumps([{"index": i, "tag": t.label(), "t": t.t} for i, t in enumerate(self.session.tags)])
+            return (self.session.summary() + "\nCurrent tuning: " + json.dumps(self.get_settings()) + "\nScore: " + res.text()
+                    + "\nTags with index: " + json.dumps([{"index": i, "tag": t.label(), "kind": t.kind, "family": t.family or "note", "t": t.t} for i, t in enumerate(self.session.tags)]))
         if name == "tag_window":
             idx = int(args["index"])
             if idx < 0 or idx >= len(self.session.tags):
                 return f"no tag with index {idx} (there are {len(self.session.tags)})"
             return json.dumps(self.session.tag_window(idx, float(args.get("half_ms", 150.0))), separators=(",", ":"))
-        if name == "get_hit_settings":
+        if name == "get_tuning":
             return json.dumps(self.get_settings())
-        if name == "evaluate_hit_settings":
+        if name == "evaluate_tuning":
             merged = dict(self.get_settings(), **(args.get("settings") or {}))
             res = self.session.evaluate(merged, bool(args.get("complete", self.complete)))
             self.last_result = res
             return json.dumps({"settings": res.config, "score": round(res.score, 2), "summary": res.text(), "per_tag": res.per_tag[:40]}, separators=(",", ":"))
-        if name == "auto_fit_hit_settings":
+        if name == "auto_fit_tuning":
             cfg, res = auto_fit(self.session, self.get_settings(), bool(args.get("complete", self.complete)))
             self.last_result = res
             return json.dumps({"best_settings": cfg, "score": round(res.score, 2), "summary": res.text()}, separators=(",", ":"))
-        if name == "apply_hit_settings":
+        if name == "apply_tuning":
             applied = self.apply_settings(dict(self.get_settings(), **(args.get("settings") or {})))
             res = self.session.evaluate(applied, self.complete)
             return "Applied " + json.dumps(applied) + f". Recording now scores: {res.text()}"

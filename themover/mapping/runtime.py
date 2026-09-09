@@ -62,19 +62,43 @@ class Runtime:
             self.engine.set_profile(profile)
             for i, c in enumerate(profile.controllers[:2]):
                 self.devices.set_color(i, tuple(c.color))
-            for g in self.devices.gestures:
-                sens = max(0.2, min(3.0, profile.gesture_sensitivity or 1.0))
-                g.config.swing_threshold_g = 1.1 * sens
-                g.config.thrust_threshold_g = 1.4 * sens
-                g.config.flick_threshold_dps = 400.0 * sens
-                g.config.cooldown_s = max(0.03, min(2.0, (profile.gesture_cooldown_ms or 220) / 1000.0))
-                g.config.pulse_s = min(0.12, g.config.cooldown_s * 0.8)
+            self._configure_gestures(profile)
             rhythm = self.profile_uses_hits(profile)
             self.engine.fast_sources = {b.source for b in profile.bindings if b.enabled and ".hit." in b.source and b.effective_mode() == "tap"}
             self.devices.set_low_latency(rhythm)
             for det in self.devices.hits:
                 det.config = hit_config_from_dict(profile.hit_config)
                 det.reset()
+
+    def _configure_gestures(self, profile: Profile) -> None:
+        from themover.ai.motion_capture import gesture_config_for
+
+        for g in self.devices.gestures:
+            g.config = gesture_config_for(profile.gesture_sensitivity or 1.0, profile.gesture_cooldown_ms or 220)
+
+    def current_tuning(self) -> dict:
+        """Hit detector settings + gesture sensitivity / cooldown of the active profile, as one flat dict."""
+        from themover.ai.motion_capture import normalise_tuning
+        from themover.core.hits import hit_config_to_dict
+
+        base = dict(self.profile.hit_config) or (hit_config_to_dict(self.devices.hits[0].config) if self.devices.hits else {})
+        return normalise_tuning(dict(base, gesture_sensitivity=self.profile.gesture_sensitivity, gesture_cooldown_ms=self.profile.gesture_cooldown_ms))
+
+    def apply_tuning(self, data: dict) -> dict:
+        """Live-apply hit settings and/or gesture sensitivity / cooldown; remembers them in the profile."""
+        from themover.ai.motion_capture import normalise_tuning, split_tuning
+
+        hit, ges = split_tuning(data)
+        if hit:
+            self.apply_hit_config(dict(self.profile.hit_config, **hit))
+        if ges:
+            with self._lock:
+                if "gesture_sensitivity" in ges:
+                    self.profile.gesture_sensitivity = max(0.2, min(3.0, float(ges["gesture_sensitivity"] or 1.0)))
+                if "gesture_cooldown_ms" in ges:
+                    self.profile.gesture_cooldown_ms = int(max(30, min(2000, int(ges["gesture_cooldown_ms"] or 220))))
+                self._configure_gestures(self.profile)
+        return normalise_tuning(self.current_tuning())
 
     def apply_hit_config(self, data: dict) -> dict:
         """Live-update the drum detector settings (and remember them in the profile)."""

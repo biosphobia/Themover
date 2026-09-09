@@ -1,4 +1,4 @@
-"""Timeline widget: recorded motion, detected hits and tags on one navigable strip."""
+"""Timeline widget: recorded motion, detected hits / gestures, mapping actions and tags on one navigable strip."""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,8 +10,17 @@ from PySide6.QtWidgets import QLabel, QWidget
 
 from themover.ai.motion_capture import MotionSession
 
-KIND_COLOR = {"don": QColor("#ff5252"), "kat": QColor("#4fc3f7"), "other": QColor("#fbbf24")}
+KIND_COLOR = {"don": QColor("#ff5252"), "kat": QColor("#4fc3f7"), "other": QColor("#fbbf24"), "nothing": QColor("#9e9e9e"), "note": QColor("#fbbf24")}
+_PALETTE = [QColor(c) for c in ("#a78bfa", "#34d399", "#f472b6", "#fb923c", "#facc15", "#22d3ee", "#c084fc", "#4ade80")]
 HAND_COLOR = {0: QColor("#ff3fb4"), 1: QColor("#33e6ff")}
+ACTION_COLOR = QColor("#e2e8f0")
+
+
+def kind_color(kind: str) -> QColor:
+    """Stable colour per tag / event kind (fixed for don, kat, nothing; hashed for the rest)."""
+    if kind in KIND_COLOR:
+        return KIND_COLOR[kind]
+    return _PALETTE[sum(ord(ch) for ch in kind) % len(_PALETTE)]
 
 
 class TimelineWidget(QWidget):
@@ -26,7 +35,7 @@ class TimelineWidget(QWidget):
         self.cursor = 0.0
         self.view_start = 0.0
         self.view_span = 10.0
-        self.replay_hits: list[dict] = []  # hits from a replay with candidate settings (drawn hollow)
+        self.replay_hits: list[dict] = []  # hits / gestures from a replay with candidate tuning (drawn hollow)
         self._drag = False
         self._pan_origin: Optional[tuple[float, float]] = None
         self._cache: dict = {}
@@ -87,7 +96,8 @@ class TimelineWidget(QWidget):
         s = self.session
         axis_h = 18
         tracks_top = axis_h + 4
-        track_h = (h - tracks_top - 6) / 2
+        lane_h = 22 if s.actions else 0
+        track_h = (h - tracks_top - 6 - lane_h) / 2
         # time axis
         p.setPen(QColor("#4b4f63"))
         p.setFont(QFont("Segoe UI", 8))
@@ -108,11 +118,13 @@ class TimelineWidget(QWidget):
             p.setPen(QColor("#9aa0b4"))
             p.drawText(QPointF(6, top + 14), "right hand (c0)" if hand == 0 else "left hand (c1)")
             self._draw_track(p, hand, rect)
+        if lane_h:
+            self._draw_actions(p, QRectF(0, tracks_top + 2 * track_h, w, lane_h - 4))
         # tags
         for i, tag in enumerate(s.tags):
             x = self._x(tag.t, w)
             if 0 <= x <= w:
-                col = KIND_COLOR.get(tag.kind, KIND_COLOR["other"])
+                col = kind_color(tag.kind)
                 p.setPen(QPen(col, 2, Qt.DashLine))
                 p.drawLine(QPointF(x, axis_h), QPointF(x, h))
                 p.setPen(col)
@@ -176,24 +188,58 @@ class TimelineWidget(QWidget):
         p.drawPath(path)
         p.setPen(QPen(QColor("#33364a"), 1, Qt.DotLine))
         p.drawLine(QPointF(rect.left(), mid), QPointF(rect.right(), mid))
-        # hits: recorded (filled) and replay (hollow)
-        for hits, filled in ((s.hits, True), (self.replay_hits, False)):
-            for hit in hits:
-                if hit.get("hand") != hand:
+        # events: recorded (filled) and replay (hollow); hits = triangles, gestures = diamonds with a label
+        y = rect.top() + 22
+        for events, filled in ((s.hits, True), (s.gestures, True), (self.replay_hits, False)):
+            for ev in events:
+                if ev.get("hand") != hand:
                     continue
-                x = self._x(hit["t"], w)
+                x = self._x(ev["t"], w)
                 if x < 0 or x > w:
                     continue
-                col = KIND_COLOR.get(hit["kind"], KIND_COLOR["other"])
-                tri = QPainterPath()
-                y = rect.top() + 22
-                tri.moveTo(x, y + 10)
-                tri.lineTo(x - 6, y)
-                tri.lineTo(x + 6, y)
-                tri.closeSubpath()
+                col = kind_color(ev["kind"])
+                shape = QPainterPath()
+                if ev.get("family", "gesture" if ev["kind"] not in ("don", "kat") else "hit") == "hit":
+                    shape.moveTo(x, y + 10); shape.lineTo(x - 6, y); shape.lineTo(x + 6, y)
+                else:
+                    shape.moveTo(x, y - 2); shape.lineTo(x - 6, y + 5); shape.lineTo(x, y + 12); shape.lineTo(x + 6, y + 5)
+                    if filled:
+                        p.setPen(col)
+                        p.drawText(QPointF(x + 8, y + 10), ev["kind"])
+                shape.closeSubpath()
                 p.setPen(QPen(col, 1.5))
                 p.setBrush(QBrush(col) if filled else Qt.NoBrush)
-                p.drawPath(tri)
+                p.drawPath(shape)
+
+    def _draw_actions(self, p: QPainter, rect: QRectF) -> None:
+        """Bars from press to release for every button target the mapping sent while recording."""
+        s = self.session
+        w = self.width()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor("#161821")))
+        p.drawRoundedRect(rect, 4, 4)
+        p.setPen(QColor("#9aa0b4"))
+        p.drawText(QPointF(6, rect.top() + 14), "sent to game")
+        open_at: dict[str, float] = {}
+        end = self.view_start + self.view_span
+        bars: list[tuple[str, float, float]] = []
+        for a in s.actions:
+            if a.get("down"):
+                open_at[a["target"]] = a["t"]
+            else:
+                t0 = open_at.pop(a["target"], None)
+                if t0 is not None:
+                    bars.append((a["target"], t0, a["t"]))
+        bars += [(k, t0, s.duration) for k, t0 in open_at.items()]
+        for target, t0, t1 in bars:
+            if t1 < self.view_start or t0 > end:
+                continue
+            x0, x1 = self._x(t0, w), self._x(t1, w)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(ACTION_COLOR))
+            p.drawRect(QRectF(x0, rect.top() + 4, max(2.0, x1 - x0), rect.height() - 8))
+            p.setPen(QColor("#0f1015"))
+            p.drawText(QPointF(x0 + 2, rect.top() + 14), target.split(".", 1)[-1])
 
     # ------------------------------------------------------------ input
     def mousePressEvent(self, event) -> None:  # noqa: N802
