@@ -310,9 +310,11 @@ class AutoCalibration:
         # theta spans the two quarter centres, omega the whole window: rescale.
         span = (len(window) - q) / len(window)
         est = theta / (omega_mag * span)
-        lo, hi = self._default_gyro_scale * 0.1, self._default_gyro_scale * 10.0
+        # The datasheet scale is close; refinement may only nudge it (a wrong estimate used to run away
+        # to several times the true value during fast drumming, making rotation rates absurd).
+        lo, hi = self._default_gyro_scale * 0.6, self._default_gyro_scale * 1.6
         est = max(lo, min(hi, est))
-        self.gyro_rad_per_unit = 0.7 * self.gyro_rad_per_unit + 0.3 * est
+        self.gyro_rad_per_unit = 0.9 * self.gyro_rad_per_unit + 0.1 * est
         self.scale_updates += 1
 
     def convert(self, accel_raw: tuple[int, int, int], gyro_raw: tuple[int, int, int]) -> tuple[Vec3, Vec3]:
@@ -412,6 +414,10 @@ class HidMoveController(MoveController):
         self.reports = 0
         self.report_rate = 0.0
         self._last_report_t = 0.0
+        self._clock_t0 = 0.0  # de-jittered sample clock (see _handle_report)
+        self._clock_n = 0
+        self._clock = 0.0
+        self._clock_rate = 0.0
 
     @property
     def key(self) -> str:
@@ -455,6 +461,19 @@ class HidMoveController(MoveController):
                 self.report_rate = 0.95 * self.report_rate + 0.05 * (1.0 / dt)
         self._last_report_t = now
         self.reports += 1
+        # Bluetooth delivers reports in bursts (several within a millisecond, then a ~10 ms gap), so
+        # receipt times are a poor clock.  Keep a long-term rate and spread the samples evenly, never
+        # later than receipt and never more than a burst behind it.
+        if not self._clock_t0:
+            self._clock_t0, self._clock_n, self._clock = now, 0, now
+        self._clock_n += 1
+        elapsed = now - self._clock_t0
+        if elapsed >= 1.0:
+            self._clock_rate = self._clock_n / elapsed
+        period = 1.0 / self._clock_rate if self._clock_rate > 20 else (1.0 / self.report_rate if self.report_rate > 20 else 0.0115)
+        smoothed = min(now, max(self._clock + period, now - 0.02))
+        self._clock = smoothed
+        now = smoothed
         latest = frames[-1]
         self._apply_sample(latest)
         if self.on_frame is not None:

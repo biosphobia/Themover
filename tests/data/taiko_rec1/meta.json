@@ -1,0 +1,55 @@
+{
+  "started": "2026-09-10 01:16:16",
+  "duration": 10.013,
+  "profile": "osu! taiko drums",
+  "game": "osu!taiko / Taiko no Tatsujin (no camera needed)",
+  "hit_config": {
+    "onset_g": 0.9,
+    "stop_g": 1.3,
+    "max_stroke_s": 0.25,
+    "refractory_s": 0.045,
+    "kat_angle_deg": 40.0,
+    "up_angle_deg": 110.0,
+    "pulse_s": 0.08,
+    "gravity_alpha": 0.02,
+    "onset_frames": 2,
+    "onset_cos": 0.7
+  },
+  "tuning": {
+    "onset_g": 0.9,
+    "stop_g": 1.3,
+    "max_stroke_s": 0.25,
+    "refractory_s": 0.045,
+    "kat_angle_deg": 40.0,
+    "up_angle_deg": 110.0,
+    "pulse_s": 0.08,
+    "gravity_alpha": 0.02,
+    "onset_frames": 2,
+    "onset_cos": 0.7,
+    "gesture_sensitivity": 1.15,
+    "gesture_cooldown_ms": 220
+  },
+  "bindings": [
+    "c0.button.cross -> key.enter (tap)",
+    "c0.button.circle -> key.esc (tap)",
+    "c0.button.triangle -> key.up (repeat)",
+    "c0.button.square -> key.down (repeat)",
+    "c1.button.triangle -> key.f2 (tap)",
+    "c1.button.square -> key.grave (tap)",
+    "c0.button.start -> key.esc (tap)"
+  ],
+  "sources": {
+    "camera": true,
+    "screen": false,
+    "inputs": false
+  },
+  "rates": [
+    467.8,
+    460.8
+  ],
+  "explanation": "ok so actual detection seems fine but it mixes up kan and don a lot with a heavy bias for kan. check the tracking data paired with gyro and make it work with accuracy as no 1 priority",
+  "controllers": [
+    "zcm2 90895fd45b9a",
+    "zcm2 90895fd457b5"
+  ]
+}

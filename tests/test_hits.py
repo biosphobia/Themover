@@ -62,8 +62,8 @@ def test_single_down_stroke_is_one_don_at_the_stop():
     assert len(hits) == 1
     hit, at = hits[0]
     assert hit.kind == "don" and hit.strength >= 3.0
-    assert abs(at - stop_t) < FRAME * 1.5  # fires on the first stop sample
-    assert 60 <= hit.stroke_ms <= 120
+    assert abs(at - stop_t) < FRAME * 1.5  # fires within a sample of the impact peak
+    assert 60 <= hit.stroke_ms <= 130
     assert det.hit_count == 1 and det.value("don", at + 0.05) == 1.0 and det.value("don", at + 0.2) == 0.0
 
 
@@ -72,8 +72,8 @@ def test_rebound_and_slow_waving_do_not_hit():
     t = settle(det)
     t, hits, _ = stroke(det, t, DOWN, rebound=True)
     assert len(hits) == 1
-    # A pure upward flick (strong stop) is ignored.
-    t, hits, _ = stroke(det, t + 0.1, (0.0, 0.0, 1.0), onset_g=1.6, stop_g=3.0, rebound=False)
+    # The rebound of the hand coming back up is gentler than a hit and is ignored.
+    t, hits, _ = stroke(det, t + 0.1, (0.0, 0.0, 1.0), onset_g=1.6, stop_g=2.2, rebound=False)
     assert hits == []
     # Slow arm waving of 1 g never produces a sharp stop.
     for i in range(400):
@@ -134,7 +134,7 @@ def test_soft_and_hard_strokes_fire_at_the_same_phase():
     det = DrumHitDetector()
     t = settle(det)
     offsets = []
-    for onset, stop in ((1.2, 2.0), (1.6, 3.5), (2.5, 6.0)):
+    for onset, stop in ((1.2, 3.2), (1.6, 3.5), (2.5, 6.0)):
         t, h, stop_t = stroke(det, t + 0.2, DOWN, onset_g=onset, stop_g=stop)
         assert len(h) == 1
         offsets.append(h[0][1] - stop_t)
@@ -142,7 +142,7 @@ def test_soft_and_hard_strokes_fire_at_the_same_phase():
 
 
 def test_reset_and_config():
-    det = DrumHitDetector(HitConfig(stop_g=10.0))
+    det = DrumHitDetector(HitConfig(hit_g=10.0))
     t = settle(det)
     _, h, _ = stroke(det, t, DOWN)
     assert h == []  # threshold too high for this stroke
@@ -183,3 +183,40 @@ def test_170bpm_stream_with_colour_switches_like_an_oni_chart():
         for offset, kind, kat in got[hand]:
             assert kind == ("kat" if kat else "don")
             assert abs(offset) < FRAME * 1.5
+
+
+def test_slow_windup_plateau_is_not_a_hit_but_the_impact_after_it_is():
+    """A fast swing shows a slow centripetal hump above hit_g before the sharp impact spike."""
+    det = DrumHitDetector(HitConfig(hit_g=3.0))
+    t = settle(det)
+    hits = []
+    for i in range(30):  # slow hump climbing to 4.3 g over ~170 ms, then easing to 3.3 g
+        a = 4.3 * math.sin(math.pi * (i + 1) / 40)
+        h = det.update(Vec3(0.0, -a, 1.0), t); t += FRAME
+        if h:
+            hits.append(h)
+    assert hits == []
+    for a in (4.8, 6.6, 8.1, 9.9, 7.5, 4.0, 1.5):  # the impact: +5 g within 3 samples
+        h = det.update(Vec3(0.0, -a * 0.6, 1.0 + a * 0.8), t); t += FRAME
+        if h:
+            hits.append(h)
+    assert len(hits) == 1 and hits[0].strength > 9.0
+
+
+def test_learned_signatures_decide_the_kind_and_reject_unlike_strokes():
+    from themover.core.hits import hit_config_from_dict
+
+    cfg = hit_config_from_dict({"hit_g": 3.0, "prototypes": {"0": {"don": [0.0, 0.0, 1.0], "kat": {"dir": [1.0, 0.0, 0.0], "rise": [-1.0, 0.0, 0.0]}}}, "min_proto_cos": 0.5, "proto_w_rise": 0.0})
+    assert cfg.prototypes["0"]["don"] == {"dir": [0.0, 0.0, 1.0]} and cfg.prototypes["0"]["kat"]["rise"] == [-1.0, 0.0, 0.0]
+    det = DrumHitDetector(cfg, hand=0)
+    t = settle(det)
+    t, h, _ = stroke(det, t, DOWN)  # impact spike points +z -> don signature
+    assert h and h[0][0].kind == "don" and h[0][0].proto_cos > 0.9
+    t, h, _ = stroke(det, t + 0.1, (-1.0, 0.0, 0.0))  # impact spike points +x -> kat signature
+    assert h and h[0][0].kind == "kat"
+    t, h, _ = stroke(det, t + 0.1, (0.0, 1.0, 0.0))  # impact along -y: unlike both -> ignored
+    assert h == []
+    other = DrumHitDetector(cfg, hand=1)  # no signatures for this hand: falls back to the angle rule
+    t = settle(other)
+    t, h, _ = stroke(other, t, DOWN)
+    assert h and h[0][0].kind == "don" and h[0][0].proto_cos == 0.0

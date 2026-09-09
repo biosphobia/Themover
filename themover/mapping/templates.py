@@ -190,7 +190,7 @@ TEMPLATES: dict[str, dict] = {
         "name": "osu! taiko drums",
         "game": "osu!taiko / Taiko no Tatsujin (no camera needed)",
         "description": "Each controller is a drumstick. Strike straight down for don (centre), strike angled outward or hold the trigger for kat (rim). Default osu! keys: D K = kat, F J = don.",
-        "play_style": "Hold a controller in each hand like drumsticks. The hit registers the instant your stroke STOPS, so play it like a real drum: a short, snappy stroke with a firm stop. Straight down = don (right hand J, left hand F). Angle the stroke outward, or hold the trigger while striking, for kat (right K, left D). Big notes: strike with both hands. Fast streams: alternate hands. Cross = Enter, Circle = Esc, Triangle / Square scroll the song list. Run osu!'s offset wizard once so its timing offset absorbs the controller's fixed delay.",
+        "play_style": "Hold a controller in each hand like drumsticks. The hit registers at the impact of your stroke, so play it like a real drum: a short, snappy wrist stroke. Vertical stroke = don (right hand J, left hand F). Sideways stroke with the stick held flat, or hold the trigger while striking, for kat (right K, left D). Record 10 s of don and kat strokes in the Fine-tune tab and press Auto-fit once so the app learns YOUR strokes. Big notes: strike with both hands. Fast streams: alternate hands. Cross = Enter, Circle = Esc, Triangle / Square scroll the song list. Run osu!'s offset wizard once so its timing offset absorbs the controller's fixed delay.",
         "controllers": [{"color": [255, 40, 40], "role": "right stick"}, {"color": [40, 120, 255], "role": "left stick"}],
         "bindings": [
             _b("c0.hit.don", "key.j", mode="tap", tap_ms=30, comment="right don"),
@@ -211,6 +211,19 @@ TEMPLATES: dict[str, dict] = {
         ],
         "gesture_sensitivity": 1.0,
         "gesture_cooldown_ms": 110,
+        # Detector tuning fitted on a real two-controller recording (tests/data/taiko_rec1): a hit is the
+        # peak of the stroke's acceleration lobe; don / kat come from per-hand stroke signatures.  The
+        # Fine-tune tab re-learns the signatures for any player in one short recording.
+        "hit_config": {
+            "hit_mode": "peak", "hit_g": 3.0, "min_rise_g": 2.0, "peak_drop": 0.85, "refractory_s": 0.045,
+            "min_proto_cos": 0.35, "proto_w_rise": 1.0, "proto_w_pose": 0.0,
+            "prototypes": {
+                "0": {"don": {"dir": [0.3261, -0.8855, 0.3309], "rise": [-0.0853, -0.7823, -0.617]},
+                      "kat": {"dir": [-0.1377, -0.9567, 0.2565], "rise": [-0.3111, -0.8874, -0.3403]}},
+                "1": {"don": {"dir": [-0.2039, -0.5876, 0.783], "rise": [-0.1703, -0.8967, 0.4085]},
+                      "kat": {"dir": [0.0843, -0.9431, 0.3217], "rise": [-0.3142, -0.868, 0.3846]}},
+            },
+        },
     },
     "desktop_pointer": {
         "name": "Desktop pointer",

@@ -1,0 +1,128 @@
+[
+ {
+  "t": 1.8015,
+  "kind": "don",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 2.4793,
+  "kind": "don",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 2.7623,
+  "kind": "don",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 3.2109,
+  "kind": "don",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 3.5047,
+  "kind": "don",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 3.6435,
+  "kind": "don",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 4.1562,
+  "kind": "kan",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 4.4927,
+  "kind": "kan",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 5.0481,
+  "kind": "kan",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 5.2563,
+  "kind": "kan",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 5.7049,
+  "kind": "don",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 5.8712,
+  "kind": "don",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 6.3244,
+  "kind": "kan",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 6.6555,
+  "kind": "kan",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 6.6555,
+  "kind": "kan",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 7.1522,
+  "kind": "kan",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 7.3017,
+  "kind": "kan",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 7.8144,
+  "kind": "don",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 7.9533,
+  "kind": "don",
+  "hand": 1,
+  "note": ""
+ },
+ {
+  "t": 9.0961,
+  "kind": "don",
+  "hand": 0,
+  "note": ""
+ },
+ {
+  "t": 9.245,
+  "kind": "don",
+  "hand": 1,
+  "note": ""
+ }
+]

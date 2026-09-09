@@ -166,41 +166,28 @@ Save button to remember). Coach-built profiles land in the same library and beha
 
 ### osu! taiko (rhythm games): how hits are detected
 
-Rhythm games are a special case because timing accuracy and latency decide everything. A typical
-Oni chart runs 170 BPM 1/4 streams (a note every 88 ms, 176 ms per hand when alternating) with the
-colour switching don/kat inside the stream, and at OD 5 a GREAT is only ±35 ms wide. The generic
-gesture path (threshold on a smoothed magnitude, evaluated on the engine tick) is not good enough
-for that, so drum hits use their own pipeline:
+A drum stroke with a Move is a wrist snap. The accelerometer inside the handle sees one big lobe of
+acceleration (5–13 g on a real player) that peaks at the impact; because the controller itself rotates
+during the snap, *directions* in the controller frame swing around, so the detector keys on the
+**size** of the lobe, not on a direction reversal:
 
-1. **Every IMU frame is used.** Each Bluetooth report carries two accelerometer frames (~5.7 ms
-   apart); both are decoded, not just the newest one.
-2. **A reader thread per controller.** While a rhythm profile is active, each controller gets a
-   dedicated thread that blocks on the HID read and processes a report the moment it arrives,
-   instead of waiting for the next engine tick.
-3. **The hit is the stop of the stroke.** An air-drum stroke is an acceleration lobe in the
-   direction of motion, a short cruise, then a sharp spike in the *opposite* direction as the arm
-   stops. That stop is what you feel as the hit and is by far the sharpest feature, so the hit fires
-   on the first frame of the stop lobe. Because the spike is so steep, soft and hard strokes fire at
-   the same phase (jitter is one frame, not "whenever the swing crossed a threshold").
-4. **Don or kat comes from the stroke direction relative to gravity.** Straight down (within 40°)
-   is don, angled outward or sideways is kat, upward strokes (the rebound) never fire. Holding the
-   trigger forces kat and holding Move forces don, for players who prefer a modifier. This works in
-   any grip because gravity is measured, not assumed.
-5. **No double hits, no hijacked strokes.** An onset must last two consecutive frames in a
-   consistent direction, so the single-frame blip of a rebound cannot start a false stroke, and a
-   sustained acceleration in a new direction re-arms the detector so a don→kat switch mid-stream
-   registers with the correct colour. A 45 ms refractory period follows every hit.
-6. **Keys are pressed on the reader thread.** `cN.hit.don/kat/any` bindings in tap mode bypass the
-   mapping tick entirely: the key goes down inside the hit callback and a timer releases it 30 ms
-   later. The rest of the profile (menus, rumble) still runs on the normal engine.
+- **hit_mode peak** (default): the hit fires the moment the lobe starts to fall, i.e. at the impact,
+  one or two samples late (2–5 ms at the ZCM2's ~470 Hz). **rise** fires when the lobe crosses `hit_g`
+  on the way up (earlier, slightly more jitter). Hits are pressed straight from the controller's
+  reader thread, bypassing the engine tick.
+- **hit_g** is how hard a stroke must be; a hysteresis plus a 45 ms refractory time keep one stroke
+  one hit while still allowing fast same-hand repeats (rolls alternate hands anyway).
+- **Don vs kat** is decided by per-hand **stroke signatures** learned from *your* tagged recording:
+  the direction of the impact and the direction the lobe started in, compared by cosine similarity;
+  strokes unlike every signature (rebounds, wobbles) are ignored (`min_proto_cos`). Without a
+  recording the app falls back to the lobe angle against gravity (`kat_angle_deg`), which is much
+  weaker. Holding the trigger forces kat, holding Move forces don.
+- Timestamps from Bluetooth arrive in bursts; the reader spreads samples evenly so timing is
+  consistent, and the fine-tune scoring compensates the constant delay between your video tags and
+  the strokes (tags on a 20 fps video lag the motion by 100–200 ms).
 
-Simulating a full 1448-note Oni chart (1510 strokes including big notes) through the detector gives
-every stroke detected, no extra hits, no wrong colours and a timing error of ±2.9 ms. On real
-hardware the remaining fixed delay is the Bluetooth transport plus half a report (roughly 10 to 25 ms)
-and the jitter is about one report period; run osu!'s **offset wizard** once so the constant part
-is absorbed by the game's offset. The controller cards on the Play tab show the hit count, the last
-hit and the report rate (about 85 Hz per controller over Bluetooth) so you can check a controller
-before a map.
+On the reference recording (two ZCM2 controllers, 20 strokes) every stroke of both hands is detected
+and don/kat are classified 19/20 in leave-one-out; the one miss is a very soft left-hand don.
 
 ### Fine-tune from a recording (the Fine-tune tab)
 

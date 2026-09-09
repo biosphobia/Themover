@@ -120,7 +120,13 @@ def load_profile(key: str) -> Profile:
     path = path_for(key)
     if not path.exists():
         raise KeyError(key)
-    return Profile.load(path)
+    p = Profile.load(path)
+    # A profile saved by an older version keeps its own tuning but gains detector fields it never
+    # had (e.g. the stroke signatures shipped with the taiko template).
+    if p.based_on in TEMPLATES:
+        for k, v in (TEMPLATES[p.based_on].get("hit_config") or {}).items():
+            p.hit_config.setdefault(k, v)
+    return p
 
 
 def save_profile(profile: Profile, key: Optional[str] = None, name: Optional[str] = None) -> str:

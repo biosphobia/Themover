@@ -37,7 +37,7 @@ import numpy as np
 
 from themover.config import app_data_dir
 from themover.core.gestures import GESTURE_NAMES, GestureConfig, GestureDetector
-from themover.core.hits import HIT_CONFIG_FIELDS, DrumHitDetector, HitConfig, hit_config_from_dict, hit_config_to_dict
+from themover.core.hits import HIT_CONFIG_EXTRA, HIT_CONFIG_FIELDS, DrumHitDetector, HitConfig, hit_config_from_dict, hit_config_to_dict, prototype_from_dirs
 from themover.core.state import Vec3
 
 try:
@@ -99,6 +99,7 @@ class EvalResult:
     std_offset_ms: float = 0.0
     per_tag: list[dict] = field(default_factory=list)
     config: dict = field(default_factory=dict)
+    tag_offset_ms: float = 0.0  # tags sit this far after the events (video latency); compensated in the matching
 
     @property
     def score(self) -> float:
@@ -110,6 +111,8 @@ class EvalResult:
         s = f"{self.matched}/{self.tags} tags matched, {self.missed} missed, {self.wrong_kind} wrong kind, {self.false_positives} extra detections"
         if self.matched:
             s += f"; detected {self.mean_offset_ms:+.0f} ms from the tag on average (±{self.std_offset_ms:.0f} ms)"
+        if abs(self.tag_offset_ms) >= 5:
+            s += f"; tags sit {self.tag_offset_ms:+.0f} ms after the events (video/tagging latency, compensated)"
         return s
 
     def to_dict(self) -> dict:
@@ -118,8 +121,31 @@ class EvalResult:
         return d
 
 
-def tag_family(kind: str) -> str:
+KIND_ALIASES = {"kan": "kat", "ka": "kat", "katsu": "kat", "blue": "kat", "red": "don", "do": "don"}
+
+
+def canonical_kind(kind: str) -> str:
     k = (kind or "").strip().lower()
+    return KIND_ALIASES.get(k, k)
+
+
+def dejitter_times(t: np.ndarray, max_lag: float = 0.06) -> np.ndarray:
+    """Spread burst-delivered receipt times evenly at the stream's mean period, never later than
+    receipt and never more than ``max_lag`` earlier (monotonic result)."""
+    n = len(t)
+    if n < 3:
+        return np.asarray(t, dtype=np.float64)
+    period = float(t[-1] - t[0]) / (n - 1) if t[-1] > t[0] else 0.0
+    out = np.empty(n, dtype=np.float64)
+    out[0] = float(t[0])
+    for i in range(1, n):
+        ti = float(t[i])
+        out[i] = min(max(out[i - 1], ti), max(out[i - 1] + period, ti - max_lag))
+    return out
+
+
+def tag_family(kind: str) -> str:
+    k = canonical_kind(kind)
     if k in HIT_KINDS:
         return "hit"
     if k in GESTURE_NAMES:
@@ -160,7 +186,7 @@ def suggested_tag_kinds(profile=None) -> list[str]:
 def split_tuning(data: Optional[dict]) -> tuple[dict, dict]:
     """(hit settings, gesture settings) from one flat tuning dict."""
     data = data or {}
-    hit = {k: v for k, v in data.items() if k in HIT_CONFIG_FIELDS}
+    hit = {k: v for k, v in data.items() if k in HIT_CONFIG_FIELDS or k in HIT_CONFIG_EXTRA}
     ges = {k: v for k, v in data.items() if k in GESTURE_FIELDS}
     return hit, ges
 
@@ -252,6 +278,9 @@ class MotionSession:
             s.meta = {"duration": float(max((t[-1] if len(t) else 0.0) for t in s.t))}
         try:
             s.tags = [Tag(**t) for t in json.loads((s.folder / "tags.json").read_text(encoding="utf-8"))]
+            for tag in s.tags:
+                if tag_family(tag.kind):
+                    tag.kind = canonical_kind(tag.kind)
         except (OSError, ValueError, TypeError):
             s.tags = []
         return s
@@ -263,7 +292,7 @@ class MotionSession:
     # ------------------------------------------------------------ tags
     def add_tag(self, t: float, kind: str = "don", hand: int = -1, note: str = "") -> Tag:
         kind = (kind or "").strip() or "note"
-        tag = Tag(round(float(t), 4), kind.lower() if tag_family(kind) else kind, int(hand), note)
+        tag = Tag(round(float(t), 4), canonical_kind(kind) if tag_family(kind) else kind, int(hand), note)
         self.tags.append(tag)
         self.tags.sort(key=lambda x: x.t)
         return tag
@@ -356,14 +385,20 @@ class MotionSession:
 
     def replay(self, config: HitConfig, hand: int) -> list[dict]:
         """Run the drum-hit detector over the recorded stream of one hand."""
-        det = DrumHitDetector(config=config)
+        det = DrumHitDetector(config=config, hand=hand)
         out: list[dict] = []
         t = self.t[hand]
         d = self.data[hand]
+        # Recorded order is the true sample order; receipt times come in Bluetooth bursts, so feed
+        # the detector an evenly spread clock (the live reader does the same since this was recorded).
+        smooth = dejitter_times(t)
         for i in range(len(t)):
-            hit = det.update(Vec3(float(d[i, 0]), float(d[i, 1]), float(d[i, 2])), float(t[i]), float(d[i, 6]), bool(d[i, 7] > 0.5))
+            ti = float(smooth[i])
+            hit = det.update(Vec3(float(d[i, 0]), float(d[i, 1]), float(d[i, 2])), ti, float(d[i, 6]), bool(d[i, 7] > 0.5))
             if hit is not None:
-                out.append({"t": float(t[i]), "hand": hand, "kind": hit.kind, "family": "hit", "strength": round(hit.strength, 2), "stroke_ms": round(hit.stroke_ms, 1)})
+                out.append({"t": ti, "hand": hand, "kind": hit.kind, "family": "hit", "strength": round(hit.strength, 2), "stroke_ms": round(hit.stroke_ms, 1),
+                            "dir": [round(float(c), 3) for c in hit.stop_dir], "rise": [round(float(c), 3) for c in hit.rise_dir],
+                            "pose": [round(float(c), 3) for c in hit.pose], "angle": round(hit.angle), "proto_cos": round(hit.proto_cos, 2)})
         return out
 
     def replay_gestures(self, sensitivity: float, cooldown_ms: int, hand: int, tick_hz: float = TICK_HZ) -> list[dict]:
@@ -405,7 +440,36 @@ class MotionSession:
         events.sort(key=lambda h: h["t"])
         return events
 
-    def evaluate(self, config: Optional[dict] = None, complete: bool = False, window_ms: float = 100.0) -> EvalResult:
+    def estimate_tag_offset(self, detections: list[dict], window_ms: float = 130.0, max_ms: float = 250.0) -> float:
+        """Constant delay between the events and the player's tags (tags placed on video frames lag the
+        motion by the camera latency).  Coarse pass: the shift that matches the most tags (ties: the
+        smallest mean distance); fine pass: the median signed offset of those matches."""
+        scorable = [t for t in self.tags if t.family in ("hit", "gesture")]
+        if len(scorable) < 3 or not detections:
+            return 0.0
+        win = window_ms / 1000.0
+
+        def matches(shift: float) -> list[float]:
+            out = []
+            for tag in scorable:
+                cands = [h["t"] - (tag.t - shift) for h in detections
+                         if h["family"] == tag.family and (tag.hand < 0 or h["hand"] in (-1, tag.hand)) and abs(h["t"] - (tag.t - shift)) <= win]
+                if cands:
+                    out.append(min(cands, key=abs))
+            return out
+
+        best_key, best_shift = None, 0.0
+        for shift_ms in range(-int(max_ms), int(max_ms) + 1, 10):
+            m = matches(shift_ms / 1000.0)
+            key = (len(m), -float(np.mean(np.abs(m))) if m else 0.0, -abs(shift_ms))
+            if best_key is None or key > best_key:
+                best_key, best_shift = key, float(shift_ms)
+        m = matches(best_shift / 1000.0)
+        if m:
+            best_shift -= float(np.median(m)) * 1000.0  # centre the matched offsets on zero
+        return float(round(max(-max_ms, min(max_ms, best_shift))))
+
+    def evaluate(self, config: Optional[dict] = None, complete: bool = False, window_ms: float = 130.0, offset_ms: Optional[float] = None) -> EvalResult:
         """Score tuning settings against the tags.
 
         Tags of the hit / gesture families are matched against a replay with
@@ -418,16 +482,19 @@ class MotionSession:
         families = self.families_in_tags()
         scorable = [t for t in self.tags if t.family and t.family != "none"]
         detections = self.replay_events(cfg, families) if families else []
-        res = EvalResult(config=cfg, tags=len(scorable), detections=len(detections))
+        if offset_ms is None:
+            offset_ms = self.estimate_tag_offset(detections, window_ms)
+        res = EvalResult(config=cfg, tags=len(scorable), detections=len(detections), tag_offset_ms=float(offset_ms))
         used: set[int] = set()
         offsets: list[float] = []
         win = window_ms / 1000.0
+        shift = offset_ms / 1000.0
         for tag in self.tags:
             fam = tag.family
             if not fam:
                 continue
             if fam == "none":
-                near = [i for i, h in enumerate(detections) if abs(h["t"] - tag.t) <= win and (tag.hand < 0 or h["hand"] in (-1, tag.hand))]
+                near = [i for i, h in enumerate(detections) if abs(h["t"] - (tag.t - shift)) <= win and (tag.hand < 0 or h["hand"] in (-1, tag.hand))]
                 res.false_positives += len(near)
                 used.update(near)
                 res.per_tag.append({"tag": tag.label(), "t": tag.t, "result": "ok" if not near else f"{len(near)} event(s) fired here", "fired": [detections[i]["kind"] for i in near]})
@@ -436,7 +503,7 @@ class MotionSession:
             for i, h in enumerate(detections):
                 if i in used or h["family"] != fam or (tag.hand >= 0 and h["hand"] not in (-1, tag.hand)):
                     continue
-                dt = h["t"] - tag.t
+                dt = h["t"] - (tag.t - shift)
                 if abs(dt) <= win and (best_dt is None or abs(dt) < abs(best_dt)):
                     best_i, best_dt = i, dt
             entry = {"tag": tag.label(), "t": tag.t}
@@ -448,8 +515,9 @@ class MotionSession:
                 h = detections[best_i]
                 offsets.append(best_dt * 1000.0)
                 entry.update({"detected": h["kind"], "offset_ms": round(best_dt * 1000.0, 1)})
-                if "strength" in h:
-                    entry["strength"] = h["strength"]
+                for key in ("strength", "dir", "proto_cos", "angle"):
+                    if key in h:
+                        entry[key] = h[key]
                 if h["kind"] == tag.kind:
                     res.matched += 1
                     entry["result"] = "ok"
@@ -531,6 +599,52 @@ class MotionSession:
 # --------------------------------------------------------------------------- #
 # Auto-fit (no AI): coordinate search over the detector settings
 # --------------------------------------------------------------------------- #
+def fit_prototypes(session: MotionSession, base: Optional[dict] = None, window_ms: float = 130.0) -> dict:
+    """Learn each hand's don / kat impact directions from the tagged strokes.
+
+    The detector is replayed in a permissive mode so every stroke fires, tags are
+    matched to those strokes (with the tag latency compensated) and the unit mean of
+    the impact directions of each (hand, kind) becomes its prototype.
+    """
+    cfg = normalise_tuning(base if base is not None else session.tuning())
+    probe = dict(cfg, kind_mode="angle", prototypes={}, up_angle_deg=179.0)
+    if probe.get("hit_mode") == "reversal":
+        probe["axis_mode"] = probe.get("axis_mode", "tangential")
+    hit_cfg = hit_config_from_dict(probe)
+    events = session.replay(hit_cfg, 0) + session.replay(hit_cfg, 1)
+    events.sort(key=lambda h: h["t"])
+    shift = session.estimate_tag_offset(events, window_ms) / 1000.0
+    win = window_ms / 1000.0
+    dirs: dict[str, dict[str, list]] = {}
+    used: set[int] = set()
+    for tag in sorted(session.tags, key=lambda x: x.t):
+        if tag.family != "hit":
+            continue
+        best_i, best_dt = -1, None
+        for i, h in enumerate(events):
+            if i in used or (tag.hand >= 0 and h["hand"] != tag.hand):
+                continue
+            dt = abs(h["t"] - (tag.t - shift))
+            if dt <= win and (best_dt is None or dt < best_dt):
+                best_i, best_dt = i, dt
+        if best_i < 0:
+            continue
+        used.add(best_i)
+        h = events[best_i]
+        dirs.setdefault(str(h["hand"]), {}).setdefault(tag.kind, []).append(h)
+    protos: dict = {}
+    for hand, kinds in dirs.items():
+        for kind, hits in kinds.items():
+            entry = {}
+            for name in ("dir", "rise", "pose"):
+                p = prototype_from_dirs([h[name] for h in hits if name in h])
+                if p is not None:
+                    entry[name] = p
+            if "dir" in entry:
+                protos.setdefault(hand, {})[kind] = entry
+    return protos
+
+
 def auto_fit(session: MotionSession, base: Optional[dict] = None, complete: bool = False,
              progress: Optional[Callable[[int, int], None]] = None) -> tuple[dict, EvalResult]:
     """Coordinate search over whichever detector families the tags use (hits and/or gestures)."""
@@ -540,13 +654,41 @@ def auto_fit(session: MotionSession, base: Optional[dict] = None, complete: bool
     stages: list[tuple[str, list]] = []
     if "hit" in families:
         has_kat = any(t.kind == "kat" for t in session.tags)
-        stages += [
-            ("stop_g", [0.8, 1.0, 1.3, 1.6, 2.0, 2.5, 3.2]),
-            ("onset_g", [0.5, 0.7, 0.9, 1.2, 1.5]),
-        ]
-        if has_kat:
+        envelope = cfg.get("hit_mode", "peak") in ("peak", "rise")
+        if envelope:
+            # Get the strokes themselves right first (how hard a stroke must be), then learn the signatures.
+            for v in [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0]:
+                res = session.evaluate(dict(cfg, hit_g=v), complete)
+                if res.score > best.score:
+                    best, cfg = res, dict(cfg, hit_g=v)
+        # Learned stroke signatures: with a real player they separate don from kat far better than
+        # the stroke angle, whose gravity estimate drifts during fast drumming.
+        protos = fit_prototypes(session, cfg)
+        if protos:
+            trial = dict(cfg, prototypes=protos, kind_mode="prototype")
+            res = session.evaluate(trial, complete)
+            if res.score >= best.score:
+                best, cfg = res, trial
+        if envelope:
+            stages += [
+                ("hit_g", [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]),
+                ("min_rise_g", [1.0, 1.5, 2.0, 2.5, 3.0]),
+                ("peak_drop", [0.7, 0.8, 0.85, 0.92]),
+            ]
+        else:
+            stages += [
+                ("stop_g", [0.8, 1.0, 1.3, 1.6, 2.0, 2.5, 3.2]),
+                ("onset_g", [0.5, 0.7, 0.9, 1.2, 1.5]),
+            ]
+        if cfg.get("prototypes"):
+            stages += [("proto_w_rise", [0.0, 0.5, 1.0, 2.0]), ("proto_w_pose", [0.0, 0.5, 1.0, 2.0]), ("min_proto_cos", [0.0, 0.2, 0.35, 0.5, 0.65])]
+        elif has_kat:
             stages.append(("kat_angle_deg", [25.0, 35.0, 45.0, 55.0]))
-        stages += [("refractory_s", [0.03, 0.045, 0.07]), ("stop_g", [0.9, 1.1, 1.3, 1.5, 1.8])]
+        stages.append(("refractory_s", [0.03, 0.045, 0.07]))
+        if cfg.get("hit_mode", "peak") in ("peak", "rise"):
+            stages.append(("hit_g", [2.0, 2.5, 3.0, 3.5, 4.5]))
+        else:
+            stages.append(("stop_g", [0.9, 1.1, 1.3, 1.5, 1.8]))
     if "gesture" in families:
         stages += [
             ("gesture_sensitivity", [0.5, 0.65, 0.8, 1.0, 1.2, 1.5, 1.9]),
@@ -679,7 +821,9 @@ class MotionRecorder:
 
     def _hit_tap(self, index: int, hit) -> None:
         with self._lock:
-            self._hits.append({"t": round(hit.t - self._t0, 4), "hand": index, "kind": hit.kind, "strength": round(hit.strength, 2), "stroke_ms": round(hit.stroke_ms, 1), "modifier": hit.modifier})
+            self._hits.append({"t": round(hit.t - self._t0, 4), "hand": index, "kind": hit.kind, "strength": round(hit.strength, 2), "stroke_ms": round(hit.stroke_ms, 1), "modifier": hit.modifier,
+                               "dir": [round(float(c), 3) for c in getattr(hit, "stop_dir", (0, 0, 0))], "rise": [round(float(c), 3) for c in getattr(hit, "rise_dir", (0, 0, 0))],
+                               "pose": [round(float(c), 3) for c in getattr(hit, "pose", (0, 0, 0))], "angle": round(getattr(hit, "angle", 0.0)), "proto_cos": round(getattr(hit, "proto_cos", 0.0), 2)})
 
     def _gesture_tap(self, index: int, name: str, t: float) -> None:
         if name == "swing_any":

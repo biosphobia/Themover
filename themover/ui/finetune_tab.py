@@ -324,8 +324,17 @@ class FinetuneTab(QWidget):
         self.timeline.replay_hits = self.session.replay_events(applied)
         self.timeline.update()
         changed = {k: v for k, v in applied.items() if before.get(k) != v}
-        shown = ", ".join(f"{k}={v:g}" for k, v in (changed or {k: applied[k] for k in ("stop_g", "onset_g", "gesture_sensitivity") if k in applied}).items())
-        self.result_lbl.setText(f"Applied: {res.text()}  (hollow markers = what fires with the new tuning). {'Changed' if changed else 'Kept'}: {shown}")
+        shown_items = changed or {k: applied[k] for k in ("hit_g", "min_rise_g", "gesture_sensitivity") if k in applied}
+        parts = []
+        for k, v in shown_items.items():
+            if k == "prototypes":
+                hands = ", ".join(f"hand {h}: {'/'.join(sorted(kinds))}" for h, kinds in (v or {}).items())
+                parts.append(f"stroke signatures learned ({hands})" if v else "stroke signatures cleared")
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                parts.append(f"{k}={v:g}")
+            else:
+                parts.append(f"{k}={v}")
+        self.result_lbl.setText(f"Applied: {res.text()}  (hollow markers = what fires with the new tuning). {'Changed' if changed else 'Kept'}: " + ", ".join(parts))
 
     def _send(self) -> None:
         if self.session is None:

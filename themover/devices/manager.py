@@ -38,7 +38,7 @@ class DeviceManager:
         self.controllers: list[MoveController] = []
         self.filters: list[OrientationFilter] = [OrientationFilter() for _ in range(NUM_CONTROLLERS)]
         self.gestures: list[GestureDetector] = [GestureDetector() for _ in range(NUM_CONTROLLERS)]
-        self.hits: list[DrumHitDetector] = [DrumHitDetector() for _ in range(NUM_CONTROLLERS)]
+        self.hits: list[DrumHitDetector] = [DrumHitDetector(hand=i) for i in range(NUM_CONTROLLERS)]
         self.on_hit: Optional[Callable[[int, Hit], None]] = None  # fired from the reader thread
         self.low_latency = False  # True while a rhythm profile is active
         self.frame_taps: list = []  # callables(index, accel, gyro, t, trigger, move) - full-rate IMU listeners
@@ -174,7 +174,10 @@ class DeviceManager:
                 st.last_hit = f"{hit.kind} {hit.strength:.1f}g"
                 st.hit_count = det.hit_count
                 if self.on_hit is not None:
-                    self.on_hit(index, hit)
+                    try:
+                        self.on_hit(index, hit)
+                    except Exception:
+                        log.exception("on_hit failed")
                 for tap in self.hit_taps:
                     try:
                         tap(index, hit)
@@ -218,6 +221,8 @@ class DeviceManager:
             self.filters.reverse()
             self.gestures.reverse()
             self.hits.reverse()
+            for i, det in enumerate(self.hits):
+                det.hand = i
             for i in range(2):
                 self._wire_hits(i)
             serials = list(self.settings.controller_serials or ["", ""])
@@ -331,7 +336,10 @@ class DeviceManager:
                         st.last_hit = f"{hit.kind} {hit.strength:.1f}g"
                         st.hit_count = self.hits[i].hit_count
                         if self.on_hit is not None:
-                            self.on_hit(i, hit)
+                            try:
+                                self.on_hit(i, hit)
+                            except Exception:
+                                log.exception("on_hit failed")
                         for tap in self.hit_taps:
                             try:
                                 tap(i, hit)

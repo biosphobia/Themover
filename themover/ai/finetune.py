@@ -8,10 +8,16 @@ from typing import Any, Callable
 from themover.ai.motion_capture import MotionSession, auto_fit
 
 _TUNING_PROPS = {
-    "onset_g": {"type": "number", "description": "drum hits: acceleration (g) that starts a stroke"},
-    "stop_g": {"type": "number", "description": "drum hits: how sharp the stop must be (g); lower = easier"},
-    "kat_angle_deg": {"type": "number", "description": "drum hits: angle from straight-down that separates don from kat"},
+    "hit_g": {"type": "number", "description": "drum hits: size of the acceleration lobe (g) that counts as a stroke; lower = softer hits register"},
+    "hit_mode": {"type": "string", "enum": ["peak", "rise", "reversal"], "description": "peak = fire at the top of the lobe (the impact), rise = fire when the lobe crosses hit_g (earlier), reversal = old onset/stop model"},
+    "peak_drop": {"type": "number", "description": "peak mode: fire once the lobe fell to this fraction of its maximum (0.85)"},
     "refractory_s": {"type": "number", "description": "drum hits: minimum seconds between two hits of one hand"},
+    "min_proto_cos": {"type": "number", "description": "strokes less similar than this to every learned signature are ignored (-1 = never ignore)"},
+    "proto_w_rise": {"type": "number", "description": "weight of the lobe-start direction in the signature match (1.0)"},
+    "proto_w_pose": {"type": "number", "description": "weight of the pre-stroke pose in the signature match (0 = off)"},
+    "onset_g": {"type": "number", "description": "reversal mode: acceleration (g) that starts a stroke"},
+    "stop_g": {"type": "number", "description": "reversal mode: how sharp the stop must be (g)"},
+    "kat_angle_deg": {"type": "number", "description": "fallback without learned signatures: lobe angle from straight-down that separates don from kat"},
     "max_stroke_s": {"type": "number"},
     "up_angle_deg": {"type": "number"},
     "onset_frames": {"type": "integer"},
@@ -31,7 +37,7 @@ FINETUNE_TOOLS: list[dict[str, Any]] = [
      "input_schema": {"type": "object", "properties": {"settings": _SETTINGS_SCHEMA,
                                                        "complete": {"type": "boolean", "description": "true if the player tagged every moment that should fire (then extra detections count as false positives)"}},
                       "required": ["settings"], "additionalProperties": False}},
-    {"name": "auto_fit_tuning", "description": "Local coordinate search over the tuning fields the tags use (hit settings for don/kat tags, gesture sensitivity/cooldown for gesture tags) that maximises the tag score. Returns the best settings and score; nothing is applied.",
+    {"name": "auto_fit_tuning", "description": "Learns each hand's don / kat stroke signatures (prototypes) from the tags, compensates the tag latency, then searches the tuning fields the tags use (hit settings for don/kat tags, gesture sensitivity/cooldown for gesture tags) to maximise the tag score. Returns the best settings (prototypes included) and score; nothing is applied. Always run this first for drum recordings.",
      "input_schema": {"type": "object", "properties": {"complete": {"type": "boolean"}}, "additionalProperties": False}},
     {"name": "apply_tuning", "description": "Apply tuning live and store it in the active profile.",
      "input_schema": {"type": "object", "properties": {"settings": _SETTINGS_SCHEMA}, "required": ["settings"], "additionalProperties": False}},
@@ -44,9 +50,14 @@ happened. Tag kinds: don / kat (drum hits), a gesture name (swing_left, swing_do
 a free note. Work like an engineer:
 1. Call recording_summary, then tag_window on a few tags (matched and missed) to see what the motion really looks like:
    accel/gyro for strokes and gestures, roll/pitch/yaw and camera position for wheel, aiming or lean bindings.
-2. For hit or gesture tags, search with evaluate_tuning (and/or auto_fit_tuning) until most tags match with a small,
-   consistent offset, then apply_tuning. For action tags, notes or orientation-based controls, fix the profile itself with
-   the normal profile tools (bindings, thresholds, input ranges, modes, deadzones, tap_ms, gesture choice).
+2. For don / kat tags run auto_fit_tuning first: it learns per-hand stroke signatures ("prototypes": the direction of the
+   impact and of the lobe start in the controller frame) from the tagged strokes - with a real player that is what tells
+   don from kat, far better than any angle threshold - and estimates the constant delay between the strokes and the tags
+   (people tag the video frame, which lags the motion by ~100-200 ms; it is compensated, not an error). Then refine with
+   evaluate_tuning if needed and apply_tuning the result (pass the prototypes through unchanged). A hit is the peak of the
+   acceleration lobe of a wrist stroke (hit_mode peak); hit_g sets how hard a stroke must be. For gesture tags search
+   gesture_sensitivity / gesture_cooldown_ms. For action tags, notes or orientation-based controls, fix the profile itself
+   with the normal profile tools (bindings, thresholds, input ranges, modes, deadzones, tap_ms, gesture choice).
 3. Tell the player in plain words what you changed, how well it scores now, and what to try if it is still off. Short.
 """
 

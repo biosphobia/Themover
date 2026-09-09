@@ -101,6 +101,7 @@ def test_taiko_profile_strike_taps_key_once():
     from themover.core.state import Vec3
 
     rt, sink = make_runtime(load_template("osu_taiko"))
+    rt.apply_tuning({"kind_mode": "angle"})  # synthetic strokes do not match the shipped stroke signatures
     rt.start_devices()
     try:
         rt.arm()
@@ -113,7 +114,9 @@ def test_taiko_profile_strike_taps_key_once():
         rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, -2.0), Vec3())
         rt.step(0.006)
-        sim.simulate_motion(Vec3(0, 0, 4.0), Vec3())
+        sim.simulate_motion(Vec3(0, 0, 7.0), Vec3())  # the impact peak
+        rt.step(0.006)
+        sim.simulate_motion(Vec3(0, 0, 3.0), Vec3())  # the lobe turns down: the hit fires
         rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
         for _ in range(10):
@@ -130,6 +133,7 @@ def test_rhythm_profile_enables_fast_path_and_logs_hits():
     from themover.core.state import Vec3
 
     rt, sink = make_runtime(load_template("osu_taiko"))
+    rt.apply_tuning({"kind_mode": "angle"})
     rt.start_devices()
     try:
         assert rt.devices.low_latency is True
@@ -141,8 +145,9 @@ def test_rhythm_profile_enables_fast_path_and_logs_hits():
             rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, -0.8), Vec3()); rt.step(0.006)
         sim.simulate_motion(Vec3(0, 0, -1.2), Vec3()); rt.step(0.006)
-        sim.simulate_motion(Vec3(0, 0, 4.5), Vec3()); rt.step(0.006)  # the stop
-        assert "f" in sink.keys_down  # pressed on this very step, no extra tick needed
+        sim.simulate_motion(Vec3(0, 0, 6.5), Vec3()); rt.step(0.006)  # the impact peak
+        sim.simulate_motion(Vec3(0, 0, 2.0), Vec3()); rt.step(0.006)  # the lobe turns down: the hit fires now
+        assert "f" in sink.keys_down  # pressed inside this very step, no extra tick needed
         sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
         for _ in range(10):
             time.sleep(0.01)

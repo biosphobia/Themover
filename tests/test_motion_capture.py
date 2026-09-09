@@ -49,7 +49,7 @@ def test_replay_matches_tags_and_scores(tmp_path):
     assert abs(res.mean_offset_ms) < 8 and res.std_offset_ms < 5
     assert "5/5 tags matched" in res.text()
     # A far too high stop threshold misses everything; the score says so.
-    bad = s.evaluate({"stop_g": 7.5}, complete=True)
+    bad = s.evaluate({"hit_g": 7.5}, complete=True)
     assert bad.missed == 5 and bad.score < res.score
 
 
@@ -58,11 +58,11 @@ def test_auto_fit_recovers_from_bad_settings(tmp_path):
     s = synth_session(tmp_path, strokes)
     for t, kind in strokes:
         s.add_tag(t, kind, 0)
-    bad = {"stop_g": 6.0, "onset_g": 1.5, "kat_angle_deg": 85.0}
+    bad = {"hit_g": 6.0, "kat_angle_deg": 85.0}
     assert s.evaluate(bad, True).matched < 5
     cfg, res = M.auto_fit(s, bad, complete=True)
     assert res.matched == 5 and res.wrong_kind == 0
-    assert cfg["stop_g"] < 6.0 and cfg["kat_angle_deg"] < 85.0
+    assert cfg["hit_g"] < 6.0 and cfg["prototypes"]["0"]["kat"]["dir"] != cfg["prototypes"]["0"]["don"]["dir"]
 
 
 def test_session_roundtrip_tags_and_windows(tmp_path):
@@ -89,7 +89,7 @@ def test_finetune_tools_and_content(tmp_path):
     s = synth_session(tmp_path, strokes)
     for t, kind in strokes:
         s.add_tag(t, kind, 0)
-    settings = {"cfg": hit_config_to_dict(HitConfig(stop_g=6.0))}
+    settings = {"cfg": hit_config_to_dict(HitConfig(hit_g=6.0))}
     applied = []
 
     def apply(new):
@@ -104,13 +104,13 @@ def test_finetune_tools_and_content(tmp_path):
     win = json.loads(tools.execute("tag_window", {"index": 0}))
     assert win["tag"].startswith("don")
     assert "no tag" in tools.execute("tag_window", {"index": 9})
-    ev = json.loads(tools.execute("evaluate_tuning", {"settings": {"stop_g": 1.3}}))
-    assert "2/2" in ev["summary"] and ev["settings"]["stop_g"] == 1.3 and not applied
+    ev = json.loads(tools.execute("evaluate_tuning", {"settings": {"hit_g": 3.0}}))
+    assert "2/2" in ev["summary"] and ev["settings"]["hit_g"] == 3.0 and not applied
     fit = json.loads(tools.execute("auto_fit_tuning", {}))
-    assert fit["best_settings"]["stop_g"] < 6.0
+    assert fit["best_settings"]["hit_g"] < 6.0
     out = tools.execute("apply_tuning", {"settings": fit["best_settings"]})
-    assert "Applied" in out and applied and applied[-1]["stop_g"] == fit["best_settings"]["stop_g"]
-    assert json.loads(tools.execute("get_tuning", {}))["stop_g"] == fit["best_settings"]["stop_g"]
+    assert "Applied" in out and applied and applied[-1]["hit_g"] == fit["best_settings"]["hit_g"]
+    assert json.loads(tools.execute("get_tuning", {}))["hit_g"] == fit["best_settings"]["hit_g"]
     with pytest.raises(ValueError):
         tools.execute("nope", {})
     content = build_finetune_content(s, "second one is a kat", complete=True)
@@ -203,6 +203,7 @@ def test_recorder_captures_simulated_controllers_and_synthetic_camera(tmp_path, 
     monkeypatch.setattr(M, "sessions_dir", lambda: tmp_path / "rec")
     rt = Runtime(Settings(camera_backend="synthetic", controller_backend="simulated"), sink=RecordingSink())
     rt.set_profile(load_template("osu_taiko"))
+    rt.apply_tuning({"kind_mode": "angle"})  # synthetic strokes do not match the shipped stroke signatures
     rt.start()
     try:
         rec = M.MotionRecorder(rt, seconds=1.2, camera=True, screen=False, inputs=False, explanation="test run")
@@ -213,7 +214,8 @@ def test_recorder_captures_simulated_controllers_and_synthetic_camera(tmp_path, 
         time.sleep(0.3)
         sim.simulate_motion(Vec3(0, 0, 1.0), Vec3()); time.sleep(0.05)
         sim.simulate_motion(Vec3(0, 0, -1.2), Vec3()); time.sleep(0.03)
-        sim.simulate_motion(Vec3(0, 0, 4.5), Vec3()); time.sleep(0.03)
+        sim.simulate_motion(Vec3(0, 0, 6.5), Vec3()); time.sleep(0.03)  # the impact peak
+        sim.simulate_motion(Vec3(0, 0, 3.0), Vec3()); time.sleep(0.03)  # the lobe turns down: the hit fires
         sim.simulate_motion(Vec3(0, 0, 1.0), Vec3())
         deadline = time.monotonic() + 5
         while not done and time.monotonic() < deadline:
