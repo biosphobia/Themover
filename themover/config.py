@@ -43,11 +43,14 @@ class Settings:
     model: str = DEFAULT_MODEL
     refusal_fallback: bool = True
     effort: str = "high"
+    coach_full_access: bool = True  # coach may write plugins, run code and read the app's source
 
     # Devices
     camera_backend: str = "auto"  # auto | pseye | opencv | synthetic
     camera_index: int = 0
     camera_mirror: bool = True
+    camera_fps: int = 0  # 0 = highest the camera supports
+    camera_low_res: bool = False  # 320x240: PS3 Eye reaches up to 187 fps
     tracking: dict = field(default_factory=dict)  # TrackingConfig (crop, trigger zone, thresholds, exposure...)
     controller_colors: list[list[int]] = field(
         default_factory=lambda: [[255, 0, 255], [0, 255, 255]]

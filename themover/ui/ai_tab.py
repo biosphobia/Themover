@@ -8,7 +8,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
     QSplitter, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -17,8 +17,9 @@ from themover.ai.chat import CoachChat
 from themover.ai.client import ClaudeClient
 from themover.ai.coachlog import CoachLog
 from themover.ai.recorder import Recording, SessionRecorder
-from themover.config import app_data_dir
+from themover.config import app_data_dir, save_settings
 from themover.ui.context import AppContext
+from themover.ui.widgets import WrapLabel
 from themover.ui.workers import Worker, run_in_background
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ class _Host:
 
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
+
+    @property
+    def plugins(self):
+        return self.ctx.runtime.plugins if self.ctx.settings.coach_full_access else None
 
     def get_profile(self):
         return self.ctx.profile
@@ -102,6 +107,13 @@ class AITab(QWidget):
         self.clear_btn = QPushButton("New chat")
         irow.addWidget(self.input, 1); irow.addWidget(self.send_btn); irow.addWidget(self.clear_btn)
         cl.addLayout(irow)
+        prow = QHBoxLayout()
+        self.full_access = QCheckBox("Full access: the coach may write plugins, run code and read the app's source")
+        self.full_access.setChecked(ctx.settings.coach_full_access)
+        self.full_access.setToolTip("Plugins are small Python files in your TheMover/plugins folder. They run inside the app so the coach can add features the mapping vocabulary cannot express.")
+        self.plugins_lbl = WrapLabel(""); self.plugins_lbl.setObjectName("muted")
+        prow.addWidget(self.full_access); prow.addWidget(self.plugins_lbl, 1)
+        cl.addLayout(prow)
         splitter.addWidget(chat)
         splitter.setSizes([260, 420])
 
@@ -110,6 +122,7 @@ class AITab(QWidget):
         self.send_btn.clicked.connect(self._send)
         self.input.returnPressed.connect(self._send)
         self.clear_btn.clicked.connect(self._new_chat)
+        self.full_access.toggled.connect(self._toggle_full_access)
         self.rec_progress.connect(self._on_rec_progress)
         self.rec_done.connect(self._on_rec_done)
         ctx.advanced_changed.connect(self.set_advanced)
@@ -121,6 +134,15 @@ class AITab(QWidget):
     def set_advanced(self, on: bool) -> None:
         self.seconds.setVisible(on)
         self.clear_btn.setVisible(on)
+
+    def _toggle_full_access(self, on: bool) -> None:
+        self.ctx.settings.coach_full_access = on
+        save_settings(self.ctx.settings)
+        self.chat = None  # the next message builds a chat with (or without) the developer tools
+        self._refresh_plugins()
+
+    def _refresh_plugins(self) -> None:
+        self.plugins_lbl.setText(self.ctx.runtime.plugins.summary())
 
     # ------------------------------------------------------------ helpers
     def _client_or_warn(self, modal: bool = True) -> Optional[ClaudeClient]:
@@ -308,10 +330,18 @@ class AITab(QWidget):
             "add_bindings": "added bindings", "modify_binding": "modified a binding", "remove_bindings": "removed bindings",
             "set_feedback": "updated feedback rules", "set_profile_meta": "updated profile info", "replace_profile": "replaced the profile",
             "buzz_controller": "buzzed a controller", "save_profile": "saved the profile", "get_profile": "read the profile",
-            "read_live_signals": "read live controller signals",
+            "read_live_signals": "read live controller signals", "write_plugin": f"wrote plugin '{args.get('name', '')}'",
+            "list_plugins": "listed plugins", "read_plugin": "read a plugin", "delete_plugin": "deleted a plugin",
+            "plugin_status": "checked the plugins", "run_python": "ran code inside the app", "list_app_files": "listed the app's files",
+            "read_app_file": f"read {args.get('path', 'a source file')}",
         }.get(name, name)
+        if name == "write_plugin":
+            safe = (args.get("code") or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            self.history.append(f'<pre style="margin:2px 0 6px 12px;color:#9aa0b4;font-size:11px">{safe}</pre>')
+            self._refresh_plugins()
         self.history.append(f'<p style="margin:2px 0;color:#9aa0b4"><i>⚙ {pretty}</i></p>')
 
     def _on_reply(self, text: str) -> None:
         self._set_busy(False)
         self._append_system(text or "(no reply)")
+        self._refresh_plugins()

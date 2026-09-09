@@ -95,8 +95,13 @@ def target_kind(target: str) -> str:
     return "none"
 
 
+def is_plugin_source(source: str) -> bool:
+    parts = source.split(".")
+    return len(parts) == 2 and parts[0] == "plugin" and parts[1].isidentifier()
+
+
 def is_valid_source(source: str) -> bool:
-    if source in GLOBAL_SOURCES:
+    if source in GLOBAL_SOURCES or is_plugin_source(source):
         return True
     parts = source.split(".")
     if len(parts) < 2 or not parts[0].startswith("c"):
@@ -135,6 +140,7 @@ def vocabulary_text() -> str:
             lines.append(f"  cN.{group}  - {desc} [{rng}]")
     for name, desc in GLOBAL_SOURCES.items():
         lines.append(f"  {name}  - {desc}")
+    lines.append("  plugin.<name>  - any custom signal published by a plugin's signals() (see PLUGINS); values are whatever the plugin returns")
     lines.append("")
     lines.append("TARGETS:")
     lines.append("  key.<name>  - keyboard keys: " + ", ".join(KEY_NAMES))

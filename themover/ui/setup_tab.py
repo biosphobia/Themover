@@ -207,6 +207,11 @@ class SetupTab(QWidget):
         self.reconnect_btn = QPushButton("Reconnect camera")
         srow = QHBoxLayout(); srow.addWidget(self.cam_backend); srow.addWidget(QLabel("index")); srow.addWidget(self.cam_index); srow.addStretch(1)
         cf.addRow("Source", srow)
+        self.cam_res = QComboBox(); self.cam_res.addItems(["640×480 (up to 75 fps)", "320×240 (up to 187 fps)"]); self.cam_res.setCurrentIndex(1 if s.camera_low_res else 0)
+        self.cam_fps = QSpinBox(); self.cam_fps.setRange(0, 250); self.cam_fps.setSpecialValueText("max"); self.cam_fps.setValue(s.camera_fps); self.cam_fps.setSuffix(" fps")
+        self.cam_fps.setToolTip("0 / max = the highest rate the camera accepts (tried from the top down when the camera opens)")
+        mrow = QHBoxLayout(); mrow.addWidget(self.cam_res); mrow.addWidget(self.cam_fps); mrow.addStretch(1)
+        cf.addRow("Mode", mrow)
         cf.addRow("", self.mirror)
         cf.addRow("", self.reconnect_btn)
         erow = QHBoxLayout()
@@ -592,6 +597,8 @@ class SetupTab(QWidget):
         s.camera_backend = self.cam_backend.currentText()
         s.camera_index = self.cam_index.value()
         s.camera_mirror = self.mirror.isChecked()
+        s.camera_low_res = self.cam_res.currentIndex() == 1
+        s.camera_fps = self.cam_fps.value()
         self.ctx.runtime.devices.tracking.mirror = s.camera_mirror
         save_settings(s)
         self.ctx.runtime.devices.open_camera()

@@ -44,6 +44,7 @@ class DeviceManager:
         self.frame_taps: list = []  # callables(index, accel, gyro, t, trigger, move) - full-rate IMU listeners
         self.hit_taps: list = []  # callables(index, hit)
         self.gesture_taps: list = []  # callables(index, gesture_name, t)
+        self.camera_taps: list = []  # callables(frame) - every camera frame after tracking (camera thread)
         self.tracking = TrackingConfig.from_dict(settings.tracking)
         self.tracking.mirror = settings.camera_mirror
         self.tracker = SphereTracker([ColorTarget(tuple(c)) for c in settings.controller_colors], config=self.tracking)
@@ -259,7 +260,7 @@ class DeviceManager:
         self.close_camera()
         colors = [tuple(c) for c in self.settings.controller_colors]
         try:
-            source: CameraSource = open_camera(self.settings.camera_backend, self.settings.camera_index, colors, exposure=self.tracking.exposure, gain=self.tracking.gain)
+            source: CameraSource = open_camera(self.settings.camera_backend, self.settings.camera_index, colors, exposure=self.tracking.exposure, gain=self.tracking.gain, fps=self.settings.camera_fps, low_res=self.settings.camera_low_res)
         except Exception as exc:
             self._status(f"Camera: {exc}")
             return
@@ -288,6 +289,11 @@ class DeviceManager:
             for i, ctrl in enumerate(self.controllers):
                 if i < len(states):
                     ctrl.state.tracker = states[i]
+        for tap in self.camera_taps:
+            try:
+                tap(frame)
+            except Exception:
+                pass
 
     def update(self) -> WorldState:
         """Poll all controllers and refresh derived signals.  Called every tick."""

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import logging
 import time
 from typing import Any, Callable, Optional, Protocol
 
 from themover.ai.client import ClaudeClient, content_to_dicts, text_of
 from themover.ai.coachlog import CoachLog, _thinking_text
-from themover.ai.prompts import CHAT_INSTRUCTIONS, system_prompt
+from themover.ai.prompts import CHAT_INSTRUCTIONS, DEV_INSTRUCTIONS, system_prompt
 from themover.mapping.profile import Binding, FeedbackRule, Profile
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,30 @@ class ProfileHost(Protocol):
     def live_signals(self) -> dict[str, float]: ...
     def buzz(self, controller: int, rumble: float, led: Optional[tuple[int, int, int]], duration_ms: int) -> None: ...
     def save_profile(self, name: str) -> str: ...
+    # Optional (full access): a themover.plugins.PluginManager, or None to hide the developer tools.
+    plugins: Any
+
+
+DEV_TOOLS: list[dict[str, Any]] = [
+    {"name": "write_plugin", "description": "Create or overwrite a plugin (Python source) and load it immediately. Use it to add any feature the vocabulary cannot express. Returns the load report incl. errors.",
+     "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "short identifier, letters/digits/_"}, "code": {"type": "string"}, "description": {"type": "string", "description": "one line for the player"}},
+                      "required": ["name", "code"], "additionalProperties": False}},
+    {"name": "list_plugins", "description": "Installed plugins with status, hooks and their current signal values.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "read_plugin", "description": "Source code of one plugin.",
+     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}},
+    {"name": "delete_plugin", "description": "Unload and delete a plugin.",
+     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": False}},
+    {"name": "plugin_status", "description": "Errors, live signal values and the recent log of every plugin - call it after write_plugin to verify.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "run_python", "description": "Run a Python snippet inside the running app (api, runtime, engine, devices, plugins in scope). Prints and `result` come back. For inspecting values and trying ideas; persistent behaviour belongs in a plugin.",
+     "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"], "additionalProperties": False}},
+    {"name": "list_app_files", "description": "List the app's own source files (path and size) so you can read how something works.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "read_app_file", "description": "Read one of the app's source files (optionally a line range).",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string", "description": "e.g. themover/core/gestures.py"}, "start_line": {"type": "integer"}, "max_lines": {"type": "integer"}},
+                      "required": ["path"], "additionalProperties": False}},
+]
 
 
 _BINDING_PROPS = {
@@ -63,6 +88,14 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def app_source_root() -> Optional[Path]:
+    """Folder of the themover package when its .py files exist on disk (source checkout or an update override)."""
+    import themover
+
+    root = Path(themover.__file__).resolve().parent
+    return root if (root / "mapping" / "engine.py").exists() else None
+
+
 class CoachChat:
     def __init__(self, client: ClaudeClient, host: ProfileHost, max_tool_rounds: int = 8, coach_log: Optional[CoachLog] = None) -> None:
         self.client = client
@@ -74,6 +107,8 @@ class CoachChat:
         self.coach_log = coach_log
         self.extra: Optional[Any] = None  # e.g. FinetuneTools: .tools list, .handles(name), .execute(name, args)
         self.extra_instructions = ""
+        self.plugins = getattr(host, "plugins", None)
+        self.base_tools: list[dict[str, Any]] = TOOLS + DEV_TOOLS if self.plugins is not None else TOOLS
 
     def attach(self, provider: Any, instructions: str = "") -> None:
         """Add a tool provider (recording fine-tune) to this conversation."""
@@ -86,8 +121,8 @@ class CoachChat:
 
     def _tools(self) -> list[dict[str, Any]]:
         if self.extra is None:
-            return TOOLS  # same object every turn keeps the prompt-cache prefix stable
-        return TOOLS + list(self.extra.tools)
+            return self.base_tools  # same object every turn keeps the prompt-cache prefix stable
+        return self.base_tools + list(self.extra.tools)
 
     def reset(self) -> None:
         self.messages = []
@@ -95,7 +130,7 @@ class CoachChat:
     # ----------------------------------------------------------------- run
     def send(self, user_text: Any, on_text: Optional[Callable[[str], None]] = None) -> str:
         """``user_text`` may be a string or a list of content blocks (text + images)."""
-        system = system_prompt() + "\n" + CHAT_INSTRUCTIONS + ("\n" + self.extra_instructions if self.extra_instructions else "")
+        system = system_prompt() + "\n" + CHAT_INSTRUCTIONS + ("\n" + DEV_INSTRUCTIONS if self.plugins is not None else "") + ("\n" + self.extra_instructions if self.extra_instructions else "")
         self.messages.append({"role": "user", "content": user_text})
         final_text = ""
         t0 = time.monotonic()
@@ -236,6 +271,49 @@ class CoachChat:
     def _tool_buzz_controller(self, controller: int, rumble: float = 0.8, led: Optional[list[int]] = None, duration_ms: int = 300) -> str:
         self.host.buzz(int(controller), float(rumble), tuple(led) if led else None, int(duration_ms))  # type: ignore[arg-type]
         return f"Buzzed controller {controller}."
+
+    # ------------------------------------------------------ developer tools
+    def _need_plugins(self):
+        if self.plugins is None:
+            raise RuntimeError("full access is off (enable it in the AI Coach tab)")
+        return self.plugins
+
+    def _tool_write_plugin(self, name: str, code: str, description: str = "") -> str:
+        return self._need_plugins().write(name, code, description)
+
+    def _tool_list_plugins(self) -> str:
+        return json.dumps(self._need_plugins().status()["plugins"])
+
+    def _tool_read_plugin(self, name: str) -> str:
+        return self._need_plugins().read(name)
+
+    def _tool_delete_plugin(self, name: str) -> str:
+        return self._need_plugins().delete(name)
+
+    def _tool_plugin_status(self) -> str:
+        return json.dumps(self._need_plugins().status())
+
+    def _tool_run_python(self, code: str) -> str:
+        return self._need_plugins().run_python(code)
+
+    def _tool_list_app_files(self) -> str:
+        root = app_source_root()
+        if root is None:
+            return "The app's source is not available on disk in this build (it is compiled into the executable)."
+        files = sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
+        return json.dumps([{"path": str(p.relative_to(root.parent)), "bytes": p.stat().st_size} for p in files])
+
+    def _tool_read_app_file(self, path: str, start_line: int = 1, max_lines: int = 400) -> str:
+        root = app_source_root()
+        if root is None:
+            return "The app's source is not available on disk in this build."
+        target = (root.parent / path).resolve()
+        if root.parent.resolve() not in target.parents or target.suffix not in (".py", ".md", ".txt", ".json"):
+            raise ValueError("only files inside the app's own folder can be read")
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+        start = max(1, int(start_line))
+        chunk = lines[start - 1:start - 1 + max(1, min(int(max_lines), 800))]
+        return f"{path} lines {start}-{start + len(chunk) - 1} of {len(lines)}\n" + "\n".join(f"{start + i}: {l}" for i, l in enumerate(chunk))
 
     def _tool_save_profile(self, name: str) -> str:
         return self.host.save_profile(name)

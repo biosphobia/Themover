@@ -15,6 +15,7 @@ from themover.mapping.profile import Profile
 from themover.outputs.gamepad import create_gamepad_sink
 from themover.outputs.keyboard_mouse import create_keyboard_mouse_sink
 from themover.outputs.sink import CompositeSink, OutputSink, RecordingSink
+from themover.plugins import PluginManager
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class Runtime:
         self.devices_started = False
         self.tick_rate = 0.0
         self._overrides: dict[int, tuple[float, float, Optional[tuple[int, int, int]]]] = {}
+        self.plugins = PluginManager(self)
 
     # ---------------------------------------------------------------- setup
     def start_devices(self) -> None:
@@ -147,6 +149,10 @@ class Runtime:
         if self.running:
             return
         self.start_devices()
+        try:
+            self.plugins.load_all()
+        except Exception as exc:
+            log.warning("plugins: %s", exc)
         self._stop.clear()
         self.running = True
         self._thread = threading.Thread(target=self._loop, name="mover-engine", daemon=True)
@@ -159,6 +165,10 @@ class Runtime:
             self._thread = None
         self.running = False
         self.disarm()
+        try:
+            self.plugins.unload_all()
+        except Exception as exc:
+            log.warning("plugins: %s", exc)
         self.stop_devices()
 
     # ----------------------------------------------------------------- loop
@@ -182,20 +192,32 @@ class Runtime:
             else:
                 next_t = time.monotonic()
 
-    def step(self, dt: float) -> WorldState:
-        """One engine tick (public so tests and headless mode can drive it)."""
-        world = self.devices.update()
-        reader = SignalReader(
+    def _reader(self, world: WorldState) -> SignalReader:
+        return SignalReader(
             world,
             gesture_value=self.devices.gesture_value,
             gesture_strength=self.devices.gesture_strength,
             angular_speed=lambda i: self.devices.gestures[i].angular_speed if i < len(self.devices.gestures) else 0.0,
             wheel_angle=self.devices.wheel_angle,
             hit_value=self.devices.hit_value,
+            plugin_value=self.plugins.value,
         )
+
+    def read_signal(self, source: str) -> float:
+        """Current value of any source (vocabulary or plugin.*); 0 before the first tick."""
+        world = self.world
+        if world is None:
+            return 0.0
+        return self._reader(world).read(source)
+
+    def step(self, dt: float) -> WorldState:
+        """One engine tick (public so tests and headless mode can drive it)."""
+        world = self.devices.update()
+        self.world = world
+        self.plugins.tick(dt)  # plugins publish their signals before the engine reads them
+        reader = self._reader(world)
         with self._lock:
             self.engine.tick(reader, dt)
-        self.world = world
         if self.on_tick is not None:
             try:
                 self.on_tick(world)
@@ -242,14 +264,7 @@ class Runtime:
         world = self.world
         if world is None:
             return {}
-        reader = SignalReader(
-            world,
-            gesture_value=self.devices.gesture_value,
-            gesture_strength=self.devices.gesture_strength,
-            angular_speed=lambda i: self.devices.gestures[i].angular_speed if i < len(self.devices.gestures) else 0.0,
-            wheel_angle=self.devices.wheel_angle,
-            hit_value=self.devices.hit_value,
-        )
+        reader = self._reader(world)
         out: dict[str, float] = {}
         for i in range(len(world.controllers)):
             for name in ("trigger", "orient.roll", "orient.pitch", "orient.yaw", "track.x", "track.y", "track.depth", "track.tracked", "motion.strength", "motion.angular_speed"):
@@ -258,6 +273,8 @@ class Runtime:
                 if down:
                     out[f"c{i}.button.{btn}"] = 1.0
         out["wheel.angle"] = round(self.devices.wheel_angle, 1)
+        for name, value in self.plugins.values.items():
+            out[name] = round(value, 3)
         out["both.distance"] = round(reader.read("both.distance"), 3)
         for i, c in enumerate(world.controllers):
             if c.hit_count:

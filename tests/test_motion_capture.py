@@ -232,7 +232,8 @@ def test_recorder_captures_simulated_controllers_and_synthetic_camera(tmp_path, 
         assert (session.camera_video.stat().st_size) < 2_000_000
         # Camera callback for the tracker was restored after recording.
         assert rt.devices.camera.on_frame == rt.devices._on_frame
-        assert not rt.devices.frame_taps and not rt.devices.hit_taps and not rt.devices.gesture_taps and not rt.engine.action_taps
+        for taps, tap in ((rt.devices.frame_taps, rec._frame_tap), (rt.devices.hit_taps, rec._hit_tap), (rt.devices.gesture_taps, rec._gesture_tap), (rt.engine.action_taps, rec._action_tap)):
+            assert tap not in taps  # the recorder's taps are removed (the plugin manager's may stay)
         assert session.meta["tuning"]["gesture_cooldown_ms"] == rt.profile.gesture_cooldown_ms and session.meta["bindings"]
         session.close()
     finally:

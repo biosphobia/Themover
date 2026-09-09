@@ -4,6 +4,7 @@ from __future__ import annotations
 from themover import TAGLINE
 from themover.mapping.templates import templates_as_examples
 from themover.mapping.vocabulary import vocabulary_text
+from themover.plugins import EXAMPLE_PLUGIN, PLUGIN_GUIDE
 
 HARDWARE_BRIEF = """HARDWARE
 The player has two PlayStation Move controllers (c0 in the right hand, c1 in the left) and, optionally, a PS3 Eye camera.
@@ -76,4 +77,15 @@ CHAT_INSTRUCTIONS = """You are now chatting live with the player while The Mover
   reset them to default). Prefer small edits over replacing everything. Keep the profile's theme when you edit it.
 - After changing something, tell the player in one or two sentences what changed and how to try it. Keep answers short.
 - If a request is ambiguous, make a reasonable choice and say what you did; ask only when necessary.
+- You are not limited to the vocabulary. If the player asks for something the bindings cannot express (combos, sequences,
+  two-hand distances, custom detectors, macros, timers, camera tricks, anything), think outside the box and build it as a
+  plugin (see PLUGINS): write_plugin, then plugin_status / read_live_signals to verify, then bind its signals if useful.
+  Say no only when the hardware truly cannot do it.
+"""
+
+DEV_INSTRUCTIONS = PLUGIN_GUIDE + """Example plugin:
+""" + EXAMPLE_PLUGIN + """
+Other developer tools: list_plugins / read_plugin / delete_plugin, plugin_status (errors, live signal values, plugin log),
+run_python (run a snippet inside the app: api, runtime, engine, devices, plugins are in scope; assign `result` or print) - handy
+to inspect a value or try an idea before writing a plugin; list_app_files / read_app_file to read the app's own source.
 """

@@ -18,6 +18,19 @@ except Exception:  # pragma: no cover - depends on the machine
     cv2 = None  # type: ignore
 
 
+# PS3 Eye (OV7720/OV534) modes: 640x480 up to 75 fps (60 official), 320x240 up to 187 fps.
+FPS_CANDIDATES_LARGE = (75, 60, 50, 40, 30, 15)
+FPS_CANDIDATES_SMALL = (187, 150, 125, 100, 75, 60, 50, 40, 30)
+
+
+def fps_candidates(requested: int, low_res: bool) -> list[int]:
+    """Frame rates to try, highest first (``requested`` 0 = highest possible)."""
+    base = list(FPS_CANDIDATES_SMALL if low_res else FPS_CANDIDATES_LARGE)
+    if requested > 0:
+        return [requested] + [f for f in base if f < requested]
+    return base
+
+
 class CameraSource:
     name = "camera"
     width = 640
@@ -45,11 +58,11 @@ class CameraSource:
 class OpenCVCamera(CameraSource):
     """Any camera visible to OpenCV - including a PS3 Eye with the CL-Eye driver."""
 
-    def __init__(self, index: int = 0, width: int = 640, height: int = 480, fps: int = 60, exposure: int = -7, gain: int = 20) -> None:
+    def __init__(self, index: int = 0, width: int = 640, height: int = 480, fps: int = 0, exposure: int = -7, gain: int = 20) -> None:
         self.index = index
         self.width = width
         self.height = height
-        self.fps = fps
+        self.fps = fps  # 0 = highest the driver accepts
         self.exposure = exposure
         self.gain = gain
         self.name = f"camera {index}"
@@ -79,7 +92,16 @@ class OpenCVCamera(CameraSource):
             raise RuntimeError(f"camera {self.index} could not be opened")
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
+        # Highest frame rate the driver accepts (drivers that do not report a rate keep the first request).
+        got = 0.0
+        for fps in fps_candidates(self.fps, self.width <= 320):
+            cap.set(cv2.CAP_PROP_FPS, fps)
+            got = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            if got <= 0 or got >= fps - 1:
+                self.fps = fps if got <= 0 else int(round(got))
+                break
+        else:
+            self.fps = int(round(got)) if got > 0 else self.fps
         # Low exposure makes the glowing sphere pop against the room.
         self._cap = cap
         try:
@@ -90,6 +112,7 @@ class OpenCVCamera(CameraSource):
         self.set_control("gain", self.gain)
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or self.width)
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or self.height)
+        self.name = f"camera {self.index} {self.width}x{self.height} @ {self.fps} fps"
 
     def close(self) -> None:
         if self._cap is not None:
@@ -110,9 +133,10 @@ class OpenCVCamera(CameraSource):
 class PSEyeCamera(CameraSource):
     """PS3 Eye through the libusb driver (``pip install pseyepy`` + Zadig on Windows)."""
 
-    def __init__(self, index: int = 0, fps: int = 60, exposure: int = 60, gain: int = 20) -> None:
+    def __init__(self, index: int = 0, fps: int = 0, exposure: int = 60, gain: int = 20, low_res: bool = False) -> None:
         self.index = index
-        self.fps = fps
+        self.fps = fps  # 0 = highest the PS3 Eye supports at this resolution
+        self.low_res = low_res
         self.exposure = exposure if exposure >= 0 else int(max(0, min(255, 2.0 ** (13 + exposure))))
         self.gain = gain
         self.name = "PS3 Eye"
@@ -135,8 +159,20 @@ class PSEyeCamera(CameraSource):
             from pseyepy import Camera  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("pseyepy is not installed") from exc
-        self._cam = Camera(self.index, fps=self.fps, resolution=Camera.RES_LARGE, colour=True, gain=int(self.gain), exposure=int(self.exposure))
-        self.width, self.height = 640, 480
+        resolution = Camera.RES_SMALL if self.low_res else Camera.RES_LARGE
+        errors = []
+        for fps in fps_candidates(self.fps, self.low_res):
+            try:
+                self._cam = Camera(self.index, fps=fps, resolution=resolution, colour=True, gain=int(self.gain), exposure=int(self.exposure))
+                self.fps = fps
+                break
+            except Exception as exc:  # unsupported rate: try the next lower one
+                errors.append(f"{fps} fps: {exc}")
+                self._cam = None
+        if self._cam is None:
+            raise RuntimeError("PS3 Eye could not be opened: " + "; ".join(errors[-3:]))
+        self.width, self.height = (320, 240) if self.low_res else (640, 480)
+        self.name = f"PS3 Eye {self.width}x{self.height} @ {self.fps} fps"
 
     def close(self) -> None:
         if self._cam is not None:
@@ -199,7 +235,7 @@ def _is_windows() -> bool:
     return sys.platform.startswith("win")
 
 
-def open_camera(backend: str = "auto", index: int = 0, colors=None, exposure: int = -7, gain: int = 20) -> CameraSource:
+def open_camera(backend: str = "auto", index: int = 0, colors=None, exposure: int = -7, gain: int = 20, fps: int = 0, low_res: bool = False) -> CameraSource:
     """Open the best available camera according to ``backend``."""
     attempts: list[str] = []
     if backend == "synthetic":
@@ -208,7 +244,7 @@ def open_camera(backend: str = "auto", index: int = 0, colors=None, exposure: in
         return cam
     if backend in ("auto", "pseye"):
         try:
-            cam = PSEyeCamera(index, exposure=exposure, gain=gain)
+            cam = PSEyeCamera(index, fps=fps, exposure=exposure, gain=gain, low_res=low_res)
             cam.open()
             return cam
         except Exception as exc:
@@ -219,7 +255,7 @@ def open_camera(backend: str = "auto", index: int = 0, colors=None, exposure: in
         indices = [index] + [i for i in range(0, 4) if i != index] if backend == "auto" else [index]
         for i in indices:
             try:
-                cam = OpenCVCamera(i, exposure=exposure, gain=gain)
+                cam = OpenCVCamera(i, width=320 if low_res else 640, height=240 if low_res else 480, fps=fps, exposure=exposure, gain=gain)
                 cam.open()
                 frame = cam.read()
                 if frame is None:

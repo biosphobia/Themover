@@ -22,8 +22,10 @@ class SignalReader:
     def __init__(self, world: WorldState, gesture_value: Optional[GestureReader] = None,
                  gesture_strength: Optional[Callable[[int], float]] = None,
                  angular_speed: Optional[Callable[[int], float]] = None,
-                 wheel_angle: float = 0.0, hit_value: Optional[GestureReader] = None) -> None:
+                 wheel_angle: float = 0.0, hit_value: Optional[GestureReader] = None,
+                 plugin_value: Optional[Callable[[str], float]] = None) -> None:
         self.world = world
+        self.plugin_value = plugin_value or (lambda s: 0.0)
         self.gesture_value = gesture_value or (lambda i, n: 0.0)
         self.hit_value = hit_value or (lambda i, n: 0.0)
         self.gesture_strength = gesture_strength or (lambda i: 0.0)
@@ -42,6 +44,8 @@ class SignalReader:
         parts = source.split(".")
         if parts[0] == "wheel":
             return self.wheel_angle
+        if parts[0] == "plugin":
+            return self.plugin_value(source)
         if parts[0] == "both":
             return self._read_both(parts[1] if len(parts) > 1 else "")
         try:
@@ -211,6 +215,18 @@ class MappingEngine:
         timer = threading.Timer(max(0.005, tap_ms / 1000.0), self._fast_release, args=(target,))
         timer.daemon = True
         timer.start()
+
+    def hold(self, target: str) -> None:
+        """Press a button target and keep it down until unhold() (plugins)."""
+        with self._lock:
+            self._fast_held[target] = self._fast_held.get(target, 0) + 1
+            if self._pressed_buttons.get(target, 0) == 0:
+                self._press(target, True)
+                self._pressed_buttons[target] = 1
+            self.sink.flush()
+
+    def unhold(self, target: str) -> None:
+        self._fast_release(target)
 
     def _fast_release(self, target: str) -> None:
         with self._lock:

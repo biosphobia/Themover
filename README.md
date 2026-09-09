@@ -88,6 +88,19 @@ only the features that add fun, and the camera only where it clearly helps (ligh
 two-hand wheel, boxing lean). Its structured analysis (game, genre, inputs, metaphor, why the
 camera was or was not used, playability concerns) is shown after each build.
 
+### Full access: the coach can extend the app
+
+The coach is not limited to the mapping vocabulary. With **Full access** on (AI Coach tab, default on)
+it also gets developer tools: it can read the app's own source, run a snippet inside the running app,
+and write **plugins**: small Python files in `TheMover/plugins/` that are loaded immediately and run
+inside the app with access to everything (controllers, camera tracker, engine, output sink). A plugin
+can publish new sources (`plugin.<name>`) for normal bindings, or press keys, move the mouse, rumble
+and flash on its own. So if you ask for something the bindings cannot express (a two-shake reload, a
+lasso, a two-hand distance zoom, a macro, a custom detector) the coach builds it instead of saying no.
+The code it writes is shown in the chat and listed under the chat box; plugins survive restarts, are
+disabled after repeated errors, and can be deleted by the coach or by removing the file.
+Outputs from plugins only reach the game while PLAY is on, so trying things is safe.
+
 ### Coach logs
 
 Every analysis and chat turn is written to `%APPDATA%\TheMover\coach_logs\`:
@@ -243,6 +256,11 @@ Auto-calibration learns gyro bias and accelerometer scale whenever a controller 
 moment, so no calibration ritual is needed.
 
 ### Camera tracking (PS3 Eye)
+
+The camera opens at the **highest frame rate it accepts**: 640×480 tries 75 → 60 → 50… fps, and the
+320×240 mode (Setup → Advanced → Mode) tries 187 → 150 → 125… fps for the lowest latency; the fps
+box pins a rate if you prefer. The status line under the picture shows the real rate and the tracker's
+time per frame.
 
 The tracker looks for the two lit spheres as **bright, colourful blobs**, measures each blob's hue and
 gives every controller the blob nearest its colour (and nearest to where it was last seen), one blob
