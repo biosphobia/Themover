@@ -21,7 +21,7 @@ SOURCE_GROUPS: dict[str, tuple[str, str, list[str]]] = {
     "orient": ("Orientation in degrees (roll about handle, pitch above horizon, relative yaw)", "-180..180", ["roll", "pitch", "yaw"]),
     "accel": ("Acceleration in g including gravity", "-4..4", ["x", "y", "z"]),
     "gyro": ("Angular speed in degrees/second", "-2000..2000", ["x", "y", "z"]),
-    "track": ("Camera tracking of the glowing sphere: x/y -1..1, depth 0 (far)..1 (near), vx/vy velocity, tracked 0/1", "-1..1", ["x", "y", "depth", "vx", "vy", "tracked"]),
+    "track": ("Camera tracking of the glowing sphere inside the tracking area: x/y -1..1, depth 0 (far)..1 (near), vx/vy velocity, tracked 0/1, in_zone 0/1 (inside the player's trigger zone)", "-1..1", ["x", "y", "depth", "vx", "vy", "tracked", "in_zone"]),
     "motion": ("Continuous motion energy: strength (g without gravity), angular_speed (deg/s)", "0..", ["strength", "angular_speed"]),
 }
 

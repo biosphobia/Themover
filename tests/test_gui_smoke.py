@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 import pytest
 
@@ -65,6 +66,26 @@ def test_main_window_starts_and_arms(qapp):
             w.play_tab.refresh()
         assert w.play_tab.checklist._labels and w.play_tab.checklist._labels[0].isVisibleTo(w.play_tab)
         w.setup_tab.refresh()
+        # Camera tracking controls: sliders apply live, drawn rectangles set the crop / zone, calibration runs on synthetic frames.
+        st = w.setup_tab
+        dev = w.ctx.runtime.devices
+        st.brightness.setValue(120)
+        assert dev.tracking.min_brightness == 120 and dev.tracker.config is dev.tracking and w.ctx.settings.tracking["min_brightness"] == 120
+        st.zone_btn.setChecked(True)
+        assert st.camera.mode == "zone"
+        st.camera.rect_drawn.emit(0.1, 0.1, 0.6, 0.9)
+        assert dev.tracking.zone_enabled and dev.tracking.zone == [0.1, 0.1, 0.6, 0.9] and not st.zone_btn.isChecked() and st.camera.mode == "click"
+        st.crop_btn.setChecked(True); st.camera.rect_drawn.emit(0.0, 0.0, 0.5, 0.5)
+        assert dev.tracking.crop == [0.0, 0.0, 0.5, 0.5]
+        st._clear_areas()
+        assert not dev.tracking.zone_enabled and dev.tracking.crop == [0.0, 0.0, 1.0, 1.0]
+        for _ in range(20):
+            if dev.camera is not None and dev.camera.latest() is not None:
+                break
+            time.sleep(0.05)
+        report = dev.calibrate_tracking(seconds=0.3)
+        assert "colour" in report
+        st.mask_btn.setChecked(True); st.refresh(); st.mask_btn.setChecked(False)
         assert w.play_tab.how_to_play.program[0] and w.play_tab.how_to_play.grab().width() > 0
         w.mapping_tab.template_combo.setCurrentIndex(2)
         w.mapping_tab._load_template()

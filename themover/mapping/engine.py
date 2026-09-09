@@ -69,6 +69,8 @@ class SignalReader:
             tr = st.tracker
             if member == "tracked":
                 return 1.0 if tr.tracked else 0.0
+            if member == "in_zone":
+                return 1.0 if (tr.tracked and tr.in_zone) else 0.0
             return getattr(tr, member, 0.0) if tr.tracked or member in ("x", "y", "depth") else 0.0
         if group == "motion":
             if member == "strength":

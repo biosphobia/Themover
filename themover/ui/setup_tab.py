@@ -1,16 +1,17 @@
 """Setup: controllers, camera and the Claude API key.  Advanced mode reveals the knobs."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from themover.ai.client import ClaudeClient
 from themover.config import AVAILABLE_MODELS, save_settings, settings_path
 from themover.devices.psmove import HidMoveController, hid_diagnostics
+from themover.devices.tracker import TrackingConfig
 from themover.ui.camera_view import CameraView
 from themover.ui.context import AppContext
 from themover.links import controller_install_html
@@ -162,31 +163,76 @@ class SetupTab(QWidget):
         # ======================================================= camera
         card, ccl = _card("Camera (PS3 Eye or any webcam)")
         self.camera = CameraView(); ccl.addWidget(self.camera, 1)
-        hint = WrapLabel("Only some profiles use the camera. If a sphere is not tracked, click it in the picture.")
+        hint = WrapLabel("Only some profiles use the camera. Light both controllers, point them at the camera and press Calibrate. "
+                         "Drag on the picture to set the tracking area (what the tracker looks at) or the trigger zone (where camera input counts).")
         ccl.addWidget(hint)
+        self.calibrate_btn = QPushButton("✨  Calibrate colours && thresholds (both controllers lit)"); self.calibrate_btn.setObjectName("accent2")
+        ccl.addWidget(self.calibrate_btn)
+        trow = QGridLayout(); trow.setContentsMargins(0, 0, 0, 0)
+        self.crop_btn = QPushButton("Set tracking area"); self.crop_btn.setCheckable(True)
+        self.zone_btn = QPushButton("Set trigger zone"); self.zone_btn.setCheckable(True)
+        self.clear_btn = QPushButton("Clear areas")
+        self.mask_btn = QPushButton("Show tracker view"); self.mask_btn.setCheckable(True)
+        for i, w in enumerate((self.crop_btn, self.zone_btn, self.clear_btn, self.mask_btn)):
+            trow.addWidget(w, i // 2, i % 2)
+        ccl.addLayout(trow)
+        tune = QGridLayout(); tune.setContentsMargins(0, 4, 0, 0)
+        self.mask_lights = QCheckBox("Mask to the controller lights only (bright + colourful pixels)")
+        tune.addWidget(self.mask_lights, 0, 0, 1, 3)
+        self.brightness = QSlider(Qt.Horizontal); self.brightness.setRange(0, 255)
+        self.saturation = QSlider(Qt.Horizontal); self.saturation.setRange(0, 255)
+        self.hue_tol = QSlider(Qt.Horizontal); self.hue_tol.setRange(3, 60)
+        self.brightness_lbl = QLabel(); self.saturation_lbl = QLabel(); self.hue_tol_lbl = QLabel()
+        for row, (name, slider, lbl, tip) in enumerate((
+            ("Brightness", self.brightness, self.brightness_lbl, "How bright a pixel must be to count as a light. Raise it if the room shows up in the mask."),
+            ("Colourfulness", self.saturation, self.saturation_lbl, "How saturated a pixel must be. Lower it if the spheres look washed out."),
+            ("Colour strictness", self.hue_tol, self.hue_tol_lbl, "How far a blob's hue may be from the controller colour (small = strict)."),
+        ), start=1):
+            slider.setToolTip(tip); lbl.setMinimumWidth(36)
+            tune.addWidget(QLabel(name), row, 0); tune.addWidget(slider, row, 1); tune.addWidget(lbl, row, 2)
+        tune.setColumnStretch(1, 1)
+        ccl.addLayout(tune)
         crow = QHBoxLayout()
-        crow.addWidget(QLabel("Clicking sets the colour of"))
+        crow.addWidget(QLabel("Click sets colour of"))
         self.sample_target = QComboBox(); self.sample_target.addItems(["controller 1", "controller 2"]); crow.addWidget(self.sample_target)
         self.color_btns = []
         for i in range(2):
-            cb = QPushButton(f"pick colour {i + 1}"); cb.setMinimumHeight(30); self.color_btns.append(cb); crow.addWidget(cb)
-            self._advanced_widgets.append(cb)
+            cb = QPushButton(f"colour {i + 1}"); cb.setMinimumHeight(30); self.color_btns.append(cb); crow.addWidget(cb)
         crow.addStretch(1)
-        ccl.addLayout(crow)
+        cw = QWidget(); cw.setLayout(crow); ccl.addWidget(cw); self._advanced_widgets.append(cw)
         adv = QWidget(); cf = QFormLayout(adv); cf.setContentsMargins(0, 6, 0, 0)
         self.cam_backend = QComboBox(); self.cam_backend.addItems(["auto", "pseye", "opencv", "synthetic"]); self.cam_backend.setCurrentText(s.camera_backend)
         self.cam_index = QSpinBox(); self.cam_index.setRange(0, 9); self.cam_index.setValue(s.camera_index)
         self.mirror = QCheckBox("mirror (camera faces you)"); self.mirror.setChecked(s.camera_mirror)
         self.reconnect_btn = QPushButton("Reconnect camera")
-        srow = QHBoxLayout(); srow.addWidget(self.cam_backend); srow.addWidget(QLabel("index")); srow.addWidget(self.cam_index); srow.addWidget(self.reconnect_btn)
+        srow = QHBoxLayout(); srow.addWidget(self.cam_backend); srow.addWidget(QLabel("index")); srow.addWidget(self.cam_index); srow.addStretch(1)
         cf.addRow("Source", srow)
         cf.addRow("", self.mirror)
+        cf.addRow("", self.reconnect_btn)
+        erow = QHBoxLayout()
+        self.exposure = QSpinBox(); self.exposure.setRange(-13, 255); self.exposure.setToolTip("Webcam / CL-Eye: -13..0 (lower = darker). PS3 Eye via pseyepy: 0..255.")
+        self.gain = QSpinBox(); self.gain.setRange(0, 79)
+        erow.addWidget(QLabel("exposure")); erow.addWidget(self.exposure); erow.addWidget(QLabel("gain")); erow.addWidget(self.gain); erow.addStretch(1)
+        cf.addRow("Exposure", erow)
+        self.min_radius = QDoubleSpinBox(); self.min_radius.setRange(1, 60); self.min_radius.setSuffix(" px"); self.min_radius.setDecimals(0)
+        self.max_radius = QDoubleSpinBox(); self.max_radius.setRange(10, 400); self.max_radius.setSuffix(" px"); self.max_radius.setDecimals(0)
+        self.smoothing = QDoubleSpinBox(); self.smoothing.setRange(0.0, 0.95); self.smoothing.setSingleStep(0.05)
+        self.downscale = QSpinBox(); self.downscale.setRange(1, 4); self.downscale.setToolTip("Detect on a picture shrunk by this factor (faster); the centre is always refined at full resolution.")
+        rrow = QHBoxLayout(); rrow.addWidget(QLabel("min")); rrow.addWidget(self.min_radius); rrow.addWidget(QLabel("max")); rrow.addWidget(self.max_radius); rrow.addStretch(1)
+        cf.addRow("Sphere size", rrow)
+        frow = QHBoxLayout(); frow.addWidget(QLabel("smoothing")); frow.addWidget(self.smoothing); frow.addWidget(QLabel("shrink ×")); frow.addWidget(self.downscale); frow.addStretch(1)
+        cf.addRow("Filter", frow)
         drow = QHBoxLayout()
         self.near_btn = QPushButton("Set NEAR (stand close)"); self.far_btn = QPushButton("Set FAR (stand back)")
         drow.addWidget(self.near_btn); drow.addWidget(self.far_btn)
         cf.addRow("Depth", drow)
         ccl.addWidget(adv); self._advanced_widgets.append(adv)
         self.cam_status = WrapLabel(""); ccl.addWidget(self.cam_status)
+        self._tracking_widgets = (self.mask_lights, self.brightness, self.saturation, self.hue_tol, self.exposure, self.gain,
+                                  self.min_radius, self.max_radius, self.smoothing, self.downscale)
+        self._sync_tracking_widgets()
+        self._save_timer = QTimer(self); self._save_timer.setSingleShot(True); self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(lambda: save_settings(self.ctx.settings))
         right.addWidget(card)
         right.addStretch(1)
 
@@ -214,6 +260,17 @@ class SetupTab(QWidget):
         for i, b in enumerate(self.color_btns):
             b.clicked.connect(lambda _=False, i=i: self._pick_color(i))
         self.camera.clicked.connect(self._sample_color)
+        self.camera.rect_drawn.connect(self._rect_drawn)
+        self.calibrate_btn.clicked.connect(self._calibrate_tracking)
+        self.crop_btn.toggled.connect(lambda on: self._set_draw_mode("crop", on))
+        self.zone_btn.toggled.connect(lambda on: self._set_draw_mode("zone", on))
+        self.clear_btn.clicked.connect(self._clear_areas)
+        for w in (self.mask_lights,):
+            w.toggled.connect(self._tracking_changed)
+        for w in (self.brightness, self.saturation, self.hue_tol, self.exposure, self.gain, self.downscale):
+            w.valueChanged.connect(self._tracking_changed)
+        for w in (self.min_radius, self.max_radius, self.smoothing):
+            w.valueChanged.connect(self._tracking_changed)
         self.reconnect_btn.clicked.connect(self._reconnect_camera)
         self.near_btn.clicked.connect(lambda: self._set_depth("near"))
         self.far_btn.clicked.connect(lambda: self._set_depth("far"))
@@ -433,18 +490,109 @@ class SetupTab(QWidget):
         if st is None or not st.tracked:
             QMessageBox.information(self, "Not tracked", "Controller 1's sphere must be visible to the camera.")
             return
+        cfg = self._tracking_config()
         if which == "near":
-            tracker.depth.radius_near = max(st.radius, tracker.depth.radius_far + 2)
+            cfg.radius_near = max(st.radius, cfg.radius_far + 2)
         else:
-            tracker.depth.radius_far = min(st.radius, tracker.depth.radius_near - 2)
-        self.cam_status.setText(f"Depth calibration: far={tracker.depth.radius_far:.0f}px near={tracker.depth.radius_near:.0f}px")
+            cfg.radius_far = min(st.radius, cfg.radius_near - 2)
+        self._apply_tracking(cfg)
+        self.cam_status.setText(f"Depth calibration: far={cfg.radius_far:.0f}px near={cfg.radius_near:.0f}px")
+
+    # ------------------------------------------------------------ tracking
+    def _tracking_config(self) -> TrackingConfig:
+        cfg = TrackingConfig.from_dict(self.ctx.runtime.devices.tracking.to_dict())
+        cfg.mask_lights = self.mask_lights.isChecked()
+        cfg.min_brightness = self.brightness.value()
+        cfg.min_saturation = self.saturation.value()
+        cfg.hue_tolerance = self.hue_tol.value()
+        cfg.exposure = self.exposure.value()
+        cfg.gain = self.gain.value()
+        cfg.min_radius = self.min_radius.value()
+        cfg.max_radius = max(self.min_radius.value() + 1, self.max_radius.value())
+        cfg.smoothing = self.smoothing.value()
+        cfg.downscale = self.downscale.value()
+        return cfg
+
+    def _sync_tracking_widgets(self) -> None:
+        cfg = self.ctx.runtime.devices.tracking
+        for w in self._tracking_widgets:
+            w.blockSignals(True)
+        self.mask_lights.setChecked(cfg.mask_lights)
+        self.brightness.setValue(cfg.min_brightness); self.saturation.setValue(cfg.min_saturation); self.hue_tol.setValue(cfg.hue_tolerance)
+        self.exposure.setValue(int(cfg.exposure)); self.gain.setValue(int(cfg.gain))
+        self.min_radius.setValue(cfg.min_radius); self.max_radius.setValue(cfg.max_radius); self.smoothing.setValue(cfg.smoothing); self.downscale.setValue(cfg.downscale)
+        for w in self._tracking_widgets:
+            w.blockSignals(False)
+        self.brightness_lbl.setText(str(cfg.min_brightness)); self.saturation_lbl.setText(str(cfg.min_saturation)); self.hue_tol_lbl.setText(f"±{cfg.hue_tolerance}")
+        for slider in (self.brightness, self.saturation):
+            slider.setEnabled(cfg.mask_lights)
+
+    def _apply_tracking(self, cfg: TrackingConfig) -> None:
+        self.ctx.runtime.devices.apply_tracking(cfg)
+        self._sync_tracking_widgets()
+        self._save_timer.start()
+
+    def _tracking_changed(self, *_args) -> None:
+        self._apply_tracking(self._tracking_config())
+
+    def _set_draw_mode(self, mode: str, on: bool) -> None:
+        other = self.zone_btn if mode == "crop" else self.crop_btn
+        if on and other.isChecked():
+            other.setChecked(False)
+        self.camera.mode = mode if on else "click"
+        if on:
+            self.cam_status.setText("Drag a rectangle on the picture" + (" around the play area." if mode == "crop" else " where camera input should count."))
+
+    def _rect_drawn(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        cfg = self._tracking_config()
+        if self.camera.mode == "crop":
+            cfg.crop = [x0, y0, x1, y1]
+            self.crop_btn.setChecked(False)
+            self.cam_status.setText(f"Tracking area set to {x0:.0%}-{x1:.0%} × {y0:.0%}-{y1:.0%} of the picture. Positions are now -1..1 inside it.")
+        elif self.camera.mode == "zone":
+            cfg.zone = [x0, y0, x1, y1]
+            cfg.zone_enabled = True
+            self.zone_btn.setChecked(False)
+            self.cam_status.setText("Trigger zone set: camera bindings only fire while the sphere is inside the green box (track.in_zone).")
+        self._apply_tracking(cfg)
+
+    def _clear_areas(self) -> None:
+        cfg = self._tracking_config()
+        cfg.crop = [0.0, 0.0, 1.0, 1.0]
+        cfg.zone = [0.0, 0.0, 1.0, 1.0]
+        cfg.zone_enabled = False
+        self._apply_tracking(cfg)
+        self.cam_status.setText("Tracking area and trigger zone cleared (whole picture).")
+
+    def _calibrate_tracking(self) -> None:
+        dev = self.ctx.runtime.devices
+        if dev.camera is None:
+            self.cam_status.setText("No camera open.")
+            return
+        self.calibrate_btn.setEnabled(False)
+        self.cam_status.setText("Calibrating… keep both controllers lit and still for a second.")
+        w = Worker(lambda signals: dev.calibrate_tracking())
+        w.signals.finished.connect(self._on_calibrated)
+        w.signals.error.connect(lambda e: self._on_calibrated("Calibration failed: " + e.split("\n")[0]))
+        run_in_background(w)
+
+    def _on_calibrated(self, report: str) -> None:
+        self.calibrate_btn.setEnabled(True)
+        self._sync_tracking_widgets()
+        self._update_swatches()
+        p = self.ctx.profile.copy()
+        for i in range(min(2, len(p.controllers))):
+            p.controllers[i].color = list(self.ctx.settings.controller_colors[i])
+        self.ctx.apply_profile(p, reason="color")
+        save_settings(self.ctx.settings)
+        self.cam_status.setText(report)
 
     def _reconnect_camera(self) -> None:
         s = self.ctx.settings
         s.camera_backend = self.cam_backend.currentText()
         s.camera_index = self.cam_index.value()
         s.camera_mirror = self.mirror.isChecked()
-        self.ctx.runtime.devices.tracker.mirror = s.camera_mirror
+        self.ctx.runtime.devices.tracking.mirror = s.camera_mirror
         save_settings(s)
         self.ctx.runtime.devices.open_camera()
 
@@ -486,6 +634,9 @@ class SetupTab(QWidget):
             self.detected.setText("Backend is 'simulated' (Advanced → Controller backend) so real controllers are ignored.")
         else:
             self.detected.setText("No PS Move found yet. Press its PS button; The Mover rescans every 3 s.")
-        self.camera.show_frame(dev.latest_frame())
-        if dev.camera is not None and not self.cam_status.text().startswith(("Controller", "Depth")):
-            self.cam_status.setText(f"{dev.camera.source.name} · {dev.camera.fps:.0f} fps")
+        self.camera.show_frame(dev.latest_frame(mask=self.mask_btn.isChecked()))
+        if dev.camera is not None and not self.cam_status.text().startswith(("Controller", "Depth", "Drag", "Tracking", "Trigger", "Calibrat", "Found", "No bright")):
+            parts = [f"{dev.camera.source.name} · {dev.camera.fps:.0f} fps · tracker {dev.tracker.process_ms:.1f} ms"]
+            for i, det in enumerate(dev.tracker.last_detections):
+                parts.append(f"P{i + 1}: " + (f"r={det.radius:.0f}px hue±{det.hue_error:.0f}" + ("" if det.in_zone else " outside zone") if det else "not seen"))
+            self.cam_status.setText(" · ".join(parts))

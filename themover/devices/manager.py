@@ -22,7 +22,7 @@ from themover.devices.psmove import (
     SimulatedMove,
     enumerate_controllers,
 )
-from themover.devices.tracker import ColorTarget, SphereTracker
+from themover.devices.tracker import ColorTarget, SphereTracker, TrackingConfig
 
 log = logging.getLogger(__name__)
 
@@ -44,10 +44,9 @@ class DeviceManager:
         self.frame_taps: list = []  # callables(index, accel, gyro, t, trigger, move) - full-rate IMU listeners
         self.hit_taps: list = []  # callables(index, hit)
         self.gesture_taps: list = []  # callables(index, gesture_name, t)
-        self.tracker = SphereTracker(
-            [ColorTarget(tuple(c)) for c in settings.controller_colors[:NUM_CONTROLLERS]],
-            mirror=settings.camera_mirror,
-        )
+        self.tracking = TrackingConfig.from_dict(settings.tracking)
+        self.tracking.mirror = settings.camera_mirror
+        self.tracker = SphereTracker([ColorTarget(tuple(c)) for c in settings.controller_colors], config=self.tracking)
         self.camera: Optional[CameraThread] = None
         self._lock = threading.RLock()
         self._last_tick = time.monotonic()
@@ -260,7 +259,7 @@ class DeviceManager:
         self.close_camera()
         colors = [tuple(c) for c in self.settings.controller_colors]
         try:
-            source: CameraSource = open_camera(self.settings.camera_backend, self.settings.camera_index, colors)
+            source: CameraSource = open_camera(self.settings.camera_backend, self.settings.camera_index, colors, exposure=self.tracking.exposure, gain=self.tracking.gain)
         except Exception as exc:
             self._status(f"Camera: {exc}")
             return
@@ -393,13 +392,49 @@ class DeviceManager:
         if self.camera is not None and hasattr(self.camera.source, "colors"):
             self.camera.source.colors[index] = rgb  # type: ignore[attr-defined]
 
-    def latest_frame(self, overlay: bool = True) -> Optional[np.ndarray]:
+    def latest_frame(self, overlay: bool = True, mask: bool = False) -> Optional[np.ndarray]:
         if self.camera is None:
             return None
         frame = self.camera.latest()
         if frame is None:
             return None
+        if mask:
+            return self.tracker.mask_view(frame)
         return self.tracker.draw_overlay(frame) if overlay else frame
+
+    # --------------------------------------------------------------- tracking
+    def apply_tracking(self, cfg: TrackingConfig) -> None:
+        """Use new tracking settings live (crop, zone, thresholds, camera exposure / gain) and remember them."""
+        old = self.tracking
+        cfg.mirror = self.settings.camera_mirror
+        self.tracking = cfg
+        self.tracker.config = cfg
+        self.settings.tracking = cfg.to_dict()
+        if self.camera is not None and (cfg.exposure != old.exposure or cfg.gain != old.gain):
+            self.camera.source.set_control("exposure", cfg.exposure)
+            self.camera.source.set_control("gain", cfg.gain)
+
+    def calibrate_tracking(self, frames: Optional[list[np.ndarray]] = None, seconds: float = 0.6) -> str:
+        """Measure the lit spheres over a few frames and apply colours + thresholds. Returns a report."""
+        if frames is None:
+            frames = []
+            if self.camera is None:
+                return "No camera."
+            deadline = time.monotonic() + seconds
+            last_count = -1
+            while time.monotonic() < deadline and len(frames) < 12:
+                if self.camera.frame_count != last_count:
+                    last_count = self.camera.frame_count
+                    f = self.camera.latest()
+                    if f is not None:
+                        frames.append(f)
+                time.sleep(0.03)
+        result = self.tracker.calibrate(frames)
+        if result["colors"]:
+            for i, rgb in enumerate(result["colors"][:2]):
+                self.set_color(i, rgb)
+        self.apply_tracking(result["config"])
+        return result["report"]
 
     def controller_state(self, index: int) -> Optional[MoveState]:
         if index < len(self.controllers):

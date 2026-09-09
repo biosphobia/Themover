@@ -48,6 +48,7 @@ class Settings:
     camera_backend: str = "auto"  # auto | pseye | opencv | synthetic
     camera_index: int = 0
     camera_mirror: bool = True
+    tracking: dict = field(default_factory=dict)  # TrackingConfig (crop, trigger zone, thresholds, exposure...)
     controller_colors: list[list[int]] = field(
         default_factory=lambda: [[255, 0, 255], [0, 255, 255]]
     )

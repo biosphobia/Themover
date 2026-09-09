@@ -37,17 +37,38 @@ class CameraSource:
     def is_open(self) -> bool:
         return True
 
+    def set_control(self, name: str, value: float) -> bool:
+        """Change 'exposure' or 'gain' if the driver allows it; returns True when accepted."""
+        return False
+
 
 class OpenCVCamera(CameraSource):
     """Any camera visible to OpenCV - including a PS3 Eye with the CL-Eye driver."""
 
-    def __init__(self, index: int = 0, width: int = 640, height: int = 480, fps: int = 60) -> None:
+    def __init__(self, index: int = 0, width: int = 640, height: int = 480, fps: int = 60, exposure: int = -7, gain: int = 20) -> None:
         self.index = index
         self.width = width
         self.height = height
         self.fps = fps
+        self.exposure = exposure
+        self.gain = gain
         self.name = f"camera {index}"
         self._cap = None
+
+    def set_control(self, name: str, value: float) -> bool:
+        if self._cap is None or cv2 is None:
+            return False
+        prop = {"exposure": cv2.CAP_PROP_EXPOSURE, "gain": cv2.CAP_PROP_GAIN}.get(name)
+        if prop is None:
+            return False
+        try:
+            if name == "exposure" and value > 0:
+                value = -min(13.0, math.log2(256.0 / max(1.0, value)) + 1.0)  # pseye-style 0..255 -> DirectShow log2 seconds
+            ok = bool(self._cap.set(prop, float(value)))
+        except Exception:
+            return False
+        setattr(self, name, value)
+        return ok
 
     def open(self) -> None:
         if cv2 is None:
@@ -60,12 +81,13 @@ class OpenCVCamera(CameraSource):
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
         # Low exposure makes the glowing sphere pop against the room.
+        self._cap = cap
         try:
             cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-            cap.set(cv2.CAP_PROP_EXPOSURE, -7)
         except Exception:
             pass
-        self._cap = cap
+        self.set_control("exposure", self.exposure)
+        self.set_control("gain", self.gain)
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or self.width)
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or self.height)
 
@@ -88,18 +110,32 @@ class OpenCVCamera(CameraSource):
 class PSEyeCamera(CameraSource):
     """PS3 Eye through the libusb driver (``pip install pseyepy`` + Zadig on Windows)."""
 
-    def __init__(self, index: int = 0, fps: int = 60) -> None:
+    def __init__(self, index: int = 0, fps: int = 60, exposure: int = 60, gain: int = 20) -> None:
         self.index = index
         self.fps = fps
+        self.exposure = exposure if exposure >= 0 else int(max(0, min(255, 2.0 ** (13 + exposure))))
+        self.gain = gain
         self.name = "PS3 Eye"
         self._cam = None
+
+    def set_control(self, name: str, value: float) -> bool:
+        if self._cam is None or name not in ("exposure", "gain"):
+            return False
+        if name == "exposure" and value < 0:
+            value = int(max(0, min(255, 2.0 ** (13 + value))))
+        try:
+            setattr(self._cam, name, int(max(0, min(255 if name == "exposure" else 79, value))))
+        except Exception:
+            return False
+        setattr(self, name, int(value))
+        return True
 
     def open(self) -> None:
         try:
             from pseyepy import Camera  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("pseyepy is not installed") from exc
-        self._cam = Camera(self.index, fps=self.fps, resolution=Camera.RES_LARGE, colour=True, gain=20, exposure=60)
+        self._cam = Camera(self.index, fps=self.fps, resolution=Camera.RES_LARGE, colour=True, gain=int(self.gain), exposure=int(self.exposure))
         self.width, self.height = 640, 480
 
     def close(self) -> None:
@@ -163,7 +199,7 @@ def _is_windows() -> bool:
     return sys.platform.startswith("win")
 
 
-def open_camera(backend: str = "auto", index: int = 0, colors=None) -> CameraSource:
+def open_camera(backend: str = "auto", index: int = 0, colors=None, exposure: int = -7, gain: int = 20) -> CameraSource:
     """Open the best available camera according to ``backend``."""
     attempts: list[str] = []
     if backend == "synthetic":
@@ -172,7 +208,7 @@ def open_camera(backend: str = "auto", index: int = 0, colors=None) -> CameraSou
         return cam
     if backend in ("auto", "pseye"):
         try:
-            cam = PSEyeCamera(index)
+            cam = PSEyeCamera(index, exposure=exposure, gain=gain)
             cam.open()
             return cam
         except Exception as exc:
@@ -183,7 +219,7 @@ def open_camera(backend: str = "auto", index: int = 0, colors=None) -> CameraSou
         indices = [index] + [i for i in range(0, 4) if i != index] if backend == "auto" else [index]
         for i in indices:
             try:
-                cam = OpenCVCamera(i)
+                cam = OpenCVCamera(i, exposure=exposure, gain=gain)
                 cam.open()
                 frame = cam.read()
                 if frame is None:

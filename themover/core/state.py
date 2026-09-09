@@ -42,6 +42,7 @@ class TrackerState:
     """Where the glowing sphere is in the camera image (normalised)."""
 
     tracked: bool = False
+    in_zone: bool = False  # inside the trigger zone (always true when no zone is set)
     x: float = 0.0  # -1 (left) .. +1 (right)
     y: float = 0.0  # -1 (bottom) .. +1 (top)
     radius: float = 0.0  # pixels

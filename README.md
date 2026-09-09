@@ -242,6 +242,27 @@ backend, virtual gamepad on/off, engine rate, camera source / index / mirror and
 Auto-calibration learns gyro bias and accelerometer scale whenever a controller rests still for a
 moment, so no calibration ritual is needed.
 
+### Camera tracking (PS3 Eye)
+
+The tracker looks for the two lit spheres as **bright, colourful blobs**, measures each blob's hue and
+gives every controller the blob nearest its colour (and nearest to where it was last seen), one blob
+per controller. The centre is refined at full resolution with a brightness-weighted centroid, so
+positions are sub-pixel and a frame costs about 1–2 ms. In Setup:
+
+- **Calibrate colours & thresholds**: light both controllers, point them at the camera, press it. The
+  app measures the real hue of each sphere, sets the controller colours, and picks the brightness
+  threshold from the gap between the spheres and the room. The report tells you if the room is too
+  bright (lower exposure / gain in Advanced, or dim the lights).
+- **Set tracking area**: drag a rectangle around the play area; the tracker ignores everything else
+  and x/y become −1..1 inside that rectangle.
+- **Set trigger zone**: drag a rectangle where camera input should count. Outside the green box the
+  sphere is still drawn but `track.tracked` and `track.in_zone` are 0, so camera bindings stay idle.
+- **Mask to the controller lights only** with Brightness / Colourfulness / Colour-strictness sliders,
+  and **Show what the tracker sees** to view the mask. Advanced adds exposure, gain, blob size limits,
+  smoothing, the detection shrink factor and near/far depth calibration.
+
+Everything is saved in `settings.json` under `tracking`.
+
 ### LED and rumble
 
 Output reports are sent exactly like psmoveapi / PSMoveService do (49-byte report 0x02), at most
