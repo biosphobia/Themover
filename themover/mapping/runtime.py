@@ -7,6 +7,7 @@ import time
 from typing import Callable, Optional
 
 from themover.config import Settings
+from themover.core.hits import hit_config_from_dict
 from themover.core.state import WorldState
 from themover.devices.manager import DeviceManager
 from themover.mapping.engine import MappingEngine, SignalReader
@@ -59,11 +60,6 @@ class Runtime:
         with self._lock:
             self.profile = profile
             self.engine.set_profile(profile)
-            rhythm = self.profile_uses_hits(profile)
-            self.engine.fast_sources = {b.source for b in profile.bindings if b.enabled and ".hit." in b.source and b.effective_mode() == "tap"}
-            self.devices.set_low_latency(rhythm)
-            for det in self.devices.hits:
-                det.reset()
             for i, c in enumerate(profile.controllers[:2]):
                 self.devices.set_color(i, tuple(c.color))
             for g in self.devices.gestures:
@@ -73,6 +69,23 @@ class Runtime:
                 g.config.flick_threshold_dps = 400.0 * sens
                 g.config.cooldown_s = max(0.03, min(2.0, (profile.gesture_cooldown_ms or 220) / 1000.0))
                 g.config.pulse_s = min(0.12, g.config.cooldown_s * 0.8)
+            rhythm = self.profile_uses_hits(profile)
+            self.engine.fast_sources = {b.source for b in profile.bindings if b.enabled and ".hit." in b.source and b.effective_mode() == "tap"}
+            self.devices.set_low_latency(rhythm)
+            for det in self.devices.hits:
+                det.config = hit_config_from_dict(profile.hit_config)
+                det.reset()
+
+    def apply_hit_config(self, data: dict) -> dict:
+        """Live-update the drum detector settings (and remember them in the profile)."""
+        from themover.core.hits import hit_config_to_dict
+
+        cfg = hit_config_from_dict(data)
+        with self._lock:
+            for det in self.devices.hits:
+                det.config = cfg
+            self.profile.hit_config = hit_config_to_dict(cfg)
+            return dict(self.profile.hit_config)
 
     def _build_sink(self) -> OutputSink:
         if self._external_sink is not None:

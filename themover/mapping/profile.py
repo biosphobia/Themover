@@ -119,6 +119,7 @@ class Profile:
     gesture_cooldown_ms: int = 220  # minimum time between two of the same gesture
     notes: str = ""
     based_on: str = ""  # template key this profile started from ("" = coach / custom)
+    hit_config: dict = field(default_factory=dict)  # drum-hit detector overrides (onset_g, stop_g, ...)
 
     # ------------------------------------------------------------- serialise
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +135,7 @@ class Profile:
             "gesture_cooldown_ms": self.gesture_cooldown_ms,
             "notes": self.notes,
             "based_on": self.based_on,
+            "hit_config": dict(self.hit_config),
         }
 
     def to_json(self, indent: int | None = 2) -> str:
@@ -150,6 +152,7 @@ class Profile:
             gesture_cooldown_ms=int(data.get("gesture_cooldown_ms", 220) or 220),
             notes=str(data.get("notes", "")),
             based_on=str(data.get("based_on", "") or ""),
+            hit_config=dict(data.get("hit_config") or {}) if isinstance(data.get("hit_config"), dict) else {},
         )
         ctrls = data.get("controllers") or []
         if ctrls:

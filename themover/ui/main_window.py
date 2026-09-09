@@ -11,6 +11,7 @@ from themover import APP_NAME, TAGLINE, __version__
 from themover.config import Settings
 from themover.ui.ai_tab import AITab
 from themover.ui.context import AppContext
+from themover.ui.finetune_tab import FinetuneTab
 from themover.ui.mapping_tab import MappingTab
 from themover.ui.play_tab import PlayTab
 from themover.ui.setup_tab import SetupTab
@@ -45,10 +46,13 @@ class MainWindow(QMainWindow):
         self.mapping_tab = MappingTab(self.ctx)
         self.ai_tab = AITab(self.ctx)
         self.setup_tab = SetupTab(self.ctx, on_api_changed=self.ai_tab.reset_client, on_restart=self.restart_app)
+        self.finetune_tab = FinetuneTab(self.ctx)
         self.tabs.addTab(self.play_tab, "▶ Play")
         self.tabs.addTab(self.mapping_tab, "Mapping")
         self.tabs.addTab(self.ai_tab, "✨ AI Coach")
+        self.tabs.addTab(self.finetune_tab, "Fine-tune")
         self.tabs.addTab(self.setup_tab, "Setup")
+        self.finetune_tab.send_to_coach.connect(self._send_recording)
         self.advanced_toggle.toggled.connect(self.ctx.set_advanced)
         layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
@@ -73,6 +77,10 @@ class MainWindow(QMainWindow):
         if settings.check_updates_on_start:
             QTimer.singleShot(1500, lambda: self.setup_tab.check_updates(silent=True))
 
+    def _send_recording(self, session, explanation: str, complete: bool) -> None:
+        self.tabs.setCurrentWidget(self.ai_tab)
+        self.ai_tab.send_recording(session, explanation, complete)
+
     def restart_app(self) -> None:
         """Release the hardware, launch a fresh process and close this one."""
         self._timer.stop()
@@ -95,7 +103,7 @@ class MainWindow(QMainWindow):
         idx = self.tabs.currentIndex()
         if idx == 0:
             self.play_tab.refresh()
-        elif idx == 3:
+        elif self.tabs.currentWidget() is self.setup_tab:
             self.setup_tab.refresh()
         self._check_ps_button()
 

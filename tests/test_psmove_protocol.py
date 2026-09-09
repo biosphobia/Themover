@@ -209,7 +209,8 @@ def test_reader_thread_delivers_frames(monkeypatch):
     class RDev(_Dev):
         def __init__(self):
             super().__init__()
-            self.reports = [make_report(accel=(0, 4300, 0), trigger=255, buttons4=0x40)]
+            self.reports = [make_report(accel=(0, 4300, 0), trigger=255, buttons4=0x40, accel_frame1=(0, 4200, 0)),
+                            make_report(accel=(0, 4300, 0), trigger=255, buttons4=0x40)]  # duplicate frames -> one callback
 
         def read(self, n, timeout=None):
             if self.reports:
@@ -224,7 +225,7 @@ def test_reader_thread_delivers_frames(monkeypatch):
 
     def on_frame(accel, gyro, t, trigger, move):
         got.append((accel, t, trigger, move))
-        if len(got) == 2:
+        if len(got) == 3:
             done.set()
 
     c.on_frame = on_frame
@@ -232,9 +233,9 @@ def test_reader_thread_delivers_frames(monkeypatch):
     assert done.wait(1.0)
     assert not c.poll()  # the reader owns the device now
     c.stop_reader()
-    assert len(got) == 2 and got[0][1] < got[1][1] and abs((got[1][1] - got[0][1]) - 0.0057) < 1e-6
+    assert len(got) == 3 and got[0][1] < got[1][1] and 0 < (got[1][1] - got[0][1]) <= 0.0057 + 1e-6
     assert got[1][2] == 1.0 and got[1][3] is True
-    assert abs(got[1][0].y - 1.0) < 0.05 and c.state.trigger == 1.0 and c.reports == 1
+    assert abs(got[1][0].y - 1.0) < 0.05 and c.state.trigger == 1.0 and c.reports == 2
 
 
 def test_gyro_scale_is_learned_from_gravity():

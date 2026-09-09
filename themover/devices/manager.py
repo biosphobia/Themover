@@ -41,6 +41,8 @@ class DeviceManager:
         self.hits: list[DrumHitDetector] = [DrumHitDetector() for _ in range(NUM_CONTROLLERS)]
         self.on_hit: Optional[Callable[[int, Hit], None]] = None  # fired from the reader thread
         self.low_latency = False  # True while a rhythm profile is active
+        self.frame_taps: list = []  # callables(index, accel, gyro, t, trigger, move) - full-rate IMU listeners
+        self.hit_taps: list = []  # callables(index, hit)
         self.tracker = SphereTracker(
             [ColorTarget(tuple(c)) for c in settings.controller_colors[:NUM_CONTROLLERS]],
             mirror=settings.camera_mirror,
@@ -161,12 +163,22 @@ class DeviceManager:
 
         def on_frame(accel: Vec3, gyro: Vec3, t: float, trigger: float, move: bool) -> None:
             hit = det.update(accel, t, trigger, move)
+            for tap in self.frame_taps:
+                try:
+                    tap(index, accel, gyro, t, trigger, move)
+                except Exception:
+                    pass
             if hit is not None:
                 st = ctrl.state
                 st.last_hit = f"{hit.kind} {hit.strength:.1f}g"
                 st.hit_count = det.hit_count
                 if self.on_hit is not None:
                     self.on_hit(index, hit)
+                for tap in self.hit_taps:
+                    try:
+                        tap(index, hit)
+                    except Exception:
+                        pass
 
         if isinstance(ctrl, HidMoveController):
             ctrl.on_frame = on_frame
@@ -296,14 +308,24 @@ class DeviceManager:
                 st = ctrl.state
                 st.roll, st.pitch, st.yaw = self.filters[i].update(st.accel, st.gyro, dt)
                 self.gestures[i].update(st.accel, st.gyro, dt, now)
-                if not isinstance(ctrl, HidMoveController):
-                    # Simulated controllers have no reader thread: detect hits here.
+                if not isinstance(ctrl, HidMoveController) or not self.low_latency:
+                    # No reader thread (simulated controller, or not a rhythm profile): detect here.
                     hit = self.hits[i].update(st.accel, now, st.trigger, st.buttons.get("move", False))
+                    for tap in self.frame_taps:
+                        try:
+                            tap(i, st.accel, st.gyro, now, st.trigger, st.buttons.get("move", False))
+                        except Exception:
+                            pass
                     if hit is not None:
                         st.last_hit = f"{hit.kind} {hit.strength:.1f}g"
                         st.hit_count = self.hits[i].hit_count
                         if self.on_hit is not None:
                             self.on_hit(i, hit)
+                        for tap in self.hit_taps:
+                            try:
+                                tap(i, hit)
+                            except Exception:
+                                pass
                 else:
                     st.report_rate = ctrl.report_rate
                 ctrl.flush_outputs()

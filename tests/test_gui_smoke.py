@@ -28,9 +28,38 @@ def test_main_window_starts_and_arms(qapp):
         assert w.ctx.profile.bindings
         w.play_tab.play_btn.setChecked(True)
         assert w.ctx.armed
-        for i in range(4):
+        for i in range(5):
             w.tabs.setCurrentIndex(i)
             qapp.processEvents()
+        # Fine-tune tab: load a synthetic session, tag it, auto-fit applies detector settings to the profile.
+        import tempfile
+        from pathlib import Path
+
+        from tests.test_motion_capture import synth_session
+
+        ft = w.finetune_tab
+        assert ft.timeline.session is None and not ft.send_btn.isEnabled()
+        session = synth_session(Path(tempfile.mkdtemp()), [(1.0, "don"), (1.8, "kat")])
+        ft.set_session(session)
+        assert ft.send_btn.isEnabled() and ft.timeline.session is session
+        ft.timeline.set_cursor(1.0)
+        ft._add_tag("don")
+        ft.timeline.set_cursor(1.8)
+        ft._add_tag("kat")
+        assert len(session.tags) == 2 and ft.tag_table.rowCount() == 2
+        ft.timeline.zoom(0.5)
+        assert ft.timeline.grab().width() > 0
+        from themover.ai.motion_capture import auto_fit
+
+        cfg, res = auto_fit(session, {"stop_g": 6.0}, complete=True)
+        ft._on_autofit((cfg, res))
+        assert w.ctx.profile.hit_config["stop_g"] == cfg["stop_g"] and ft.timeline.replay_hits
+        assert "matched" in ft.result_lbl.text()
+        sent = []
+        ft.send_to_coach.connect(lambda s, e, c: sent.append((s, e, c)))
+        ft.explain.setText("second is kat")
+        ft._send()
+        assert sent and sent[0][1] == "second is kat"
         w.tabs.setCurrentIndex(0)
         for _ in range(10):
             w.play_tab.refresh()

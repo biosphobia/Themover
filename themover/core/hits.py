@@ -47,6 +47,28 @@ class HitConfig:
     onset_cos: float = 0.7  # ...pointing in a consistent direction
 
 
+HIT_CONFIG_FIELDS = ("onset_g", "stop_g", "max_stroke_s", "refractory_s", "kat_angle_deg", "up_angle_deg", "pulse_s", "gravity_alpha", "onset_frames", "onset_cos")
+
+
+def hit_config_from_dict(data: Optional[dict]) -> HitConfig:
+    cfg = HitConfig()
+    for k, v in (data or {}).items():
+        if k in HIT_CONFIG_FIELDS and isinstance(v, (int, float)):
+            setattr(cfg, k, int(v) if k == "onset_frames" else float(v))
+    cfg.onset_frames = max(1, min(6, cfg.onset_frames))
+    cfg.onset_g = max(0.2, min(4.0, cfg.onset_g))
+    cfg.stop_g = max(0.3, min(8.0, cfg.stop_g))
+    cfg.refractory_s = max(0.01, min(0.5, cfg.refractory_s))
+    cfg.max_stroke_s = max(0.05, min(1.0, cfg.max_stroke_s))
+    cfg.kat_angle_deg = max(5.0, min(89.0, cfg.kat_angle_deg))
+    cfg.up_angle_deg = max(cfg.kat_angle_deg + 1.0, min(179.0, cfg.up_angle_deg))
+    return cfg
+
+
+def hit_config_to_dict(cfg: HitConfig) -> dict:
+    return {k: getattr(cfg, k) for k in HIT_CONFIG_FIELDS}
+
+
 @dataclass
 class Hit:
     t: float

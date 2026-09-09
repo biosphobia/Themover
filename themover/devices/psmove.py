@@ -458,12 +458,18 @@ class HidMoveController(MoveController):
         latest = frames[-1]
         self._apply_sample(latest)
         if self.on_frame is not None:
-            # Both IMU frames, oldest first; the older one is ~5.7 ms before "now".
+            # Both IMU frames, oldest first.  The ZCM2 repeats the same frame twice
+            # (and reports ~4x faster), so drop duplicates; the older frame sits half
+            # a report interval back, never further than 5.7 ms.
+            if len(frames) == 2 and frames[0].accel == frames[1].accel and frames[0].gyro == frames[1].gyro:
+                frames = frames[1:]
+            interval = 1.0 / self.report_rate if self.report_rate > 20 else 0.0115
+            back = min(0.0057, interval / 2.0)
             trig = latest.trigger / 255.0
             move = bool(latest.buttons.get("move"))
             for i, fr in enumerate(frames):
                 accel, gyro = self.calibration.convert(fr.accel, fr.gyro)
-                t = now - (0.0057 if i == 0 else 0.0)
+                t = now - (back if (i == 0 and len(frames) == 2) else 0.0)
                 try:
                     self.on_frame(accel, gyro, t, trig, move)
                 except Exception as exc:  # never let a callback kill the reader

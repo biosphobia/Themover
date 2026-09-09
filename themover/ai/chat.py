@@ -72,13 +72,30 @@ class CoachChat:
         self.on_tool: Optional[Callable[[str, dict[str, Any], str], None]] = None
         self.last_usage: Optional[dict[str, Any]] = None
         self.coach_log = coach_log
+        self.extra: Optional[Any] = None  # e.g. FinetuneTools: .tools list, .handles(name), .execute(name, args)
+        self.extra_instructions = ""
+
+    def attach(self, provider: Any, instructions: str = "") -> None:
+        """Add a tool provider (recording fine-tune) to this conversation."""
+        self.extra = provider
+        self.extra_instructions = instructions
+
+    def detach(self) -> None:
+        self.extra = None
+        self.extra_instructions = ""
+
+    def _tools(self) -> list[dict[str, Any]]:
+        if self.extra is None:
+            return TOOLS  # same object every turn keeps the prompt-cache prefix stable
+        return TOOLS + list(self.extra.tools)
 
     def reset(self) -> None:
         self.messages = []
 
     # ----------------------------------------------------------------- run
-    def send(self, user_text: str, on_text: Optional[Callable[[str], None]] = None) -> str:
-        system = system_prompt() + "\n" + CHAT_INSTRUCTIONS
+    def send(self, user_text: Any, on_text: Optional[Callable[[str], None]] = None) -> str:
+        """``user_text`` may be a string or a list of content blocks (text + images)."""
+        system = system_prompt() + "\n" + CHAT_INSTRUCTIONS + ("\n" + self.extra_instructions if self.extra_instructions else "")
         self.messages.append({"role": "user", "content": user_text})
         final_text = ""
         t0 = time.monotonic()
@@ -87,7 +104,7 @@ class CoachChat:
         model = ""
         for _round in range(self.max_tool_rounds + 1):
             try:
-                message = self.client.stream_message(system, self.messages, max_tokens=8000, tools=TOOLS, on_text=on_text)
+                message = self.client.stream_message(system, self.messages, max_tokens=8000, tools=self._tools(), on_text=on_text)
             except Exception as exc:
                 if self.coach_log:
                     self.coach_log.log_error("chat", str(exc), user=user_text)
@@ -127,7 +144,9 @@ class CoachChat:
             try:
                 profile = self.host.get_profile()
                 self.coach_log.log_chat(
-                    game=profile.game, profile_name=profile.name, user_text=user_text, reply=final_text.strip(),
+                    game=profile.game, profile_name=profile.name,
+                    user_text=user_text if isinstance(user_text, str) else " ".join(b.get("text", "[image]") for b in user_text if isinstance(b, dict)),
+                    reply=final_text.strip(),
                     tool_calls=tool_log, thinking="\n\n".join(thinking_parts), model=model, usage=self.last_usage,
                     seconds=time.monotonic() - t0,
                 )
@@ -137,6 +156,8 @@ class CoachChat:
 
     # --------------------------------------------------------------- tools
     def execute_tool(self, name: str, args: dict[str, Any]) -> str:
+        if self.extra is not None and self.extra.handles(name):
+            return self.extra.execute(name, args)
         handler = getattr(self, f"_tool_{name}", None)
         if handler is None:
             raise ValueError(f"unknown tool {name}")

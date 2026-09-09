@@ -189,6 +189,29 @@ is absorbed by the game's offset. The controller cards on the Play tab show the 
 hit and the report rate (about 85 Hz per controller over Bluetooth) so you can check a controller
 before a map.
 
+### Fine-tune from a recording (the Fine-tune tab)
+
+When detection does not match how *you* strike, record it and let the coach fit the detector:
+
+1. Pick the profile to tune on the Play tab (e.g. osu! taiko), open **Fine-tune**, choose a length
+   and whether to include camera footage (320×240, ≤ 20 fps, ~2 MB/min) and/or screen footage
+   (640 px wide, ≤ 10 fps, ~4 MB/min), press **Record** and play a few clear strokes. Every
+   controller frame (accelerometer, gyro, trigger, buttons, orientation, camera tracking) is stored
+   at full report rate, together with the hits the detector fired.
+2. The timeline shows both hands (|accel|−1 g thick, components thin, trigger shaded), detected
+   hits as triangles (red don, blue kat) and the video frame at the cursor. Click/drag to scrub,
+   wheel to zoom, Shift+wheel to pan, ← → to step 10 ms, Space to play.
+3. Put the cursor where a hit *should* register and press **D** (don) / **K** (kat) or the Tag
+   button (hand and note optional). Tags are saved with the recording.
+4. **Auto-fit locally** searches the detector settings (onset, stop, kat angle, refractory) for the
+   best match to your tags and applies them; hollow markers show where the new settings fire.
+5. **Send everything to the coach** hands the recording, the tags, thumbnails at each tag, the
+   current score and your explanation to Claude with tools to evaluate candidate settings against
+   the tags, auto-fit, inspect raw samples around a tag, apply settings and edit the profile. It
+   reports what changed and how well it now scores. Everything is logged in `coach_logs`.
+
+Detector settings live in the profile (`hit_config`) so a tuned profile stays tuned.
+
 Preset keys: right hand J (don) / K (kat), left hand F (don) / D (kat), Cross = Enter, Circle = Esc,
 Triangle / Square scroll the song list, F2 random, ` quick retry. Rumble thumps on every hit.
 Tune with the coach ("hits register too easily" lowers sensitivity) or, in Advanced, edit the
